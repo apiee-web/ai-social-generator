@@ -9,6 +9,11 @@
  * browser bundle never sees it. Any OpenAI-compatible provider works — switch
  * by setting AI_BASE_URL and AI_MODEL (OpenAI, Groq, Together, OpenRouter,
  * DeepSeek, …). Nothing here needs installing: only Node built-ins are used.
+ *
+ * Groq is detected from the key prefix (gsk_…), so setting AI_API_KEY alone is
+ * enough — the base URL and a current model are chosen for you. Retired Groq
+ * model IDs are mapped to their replacement, and the marketing site is
+ * corrected to the real API host, so a stale tutorial value can't 404 the app.
  * ---------------------------------------------------------------------------
  */
 
@@ -52,14 +57,47 @@ const TONES = {
 /*  Helpers                                                                  */
 /* -------------------------------------------------------------------------- */
 
+const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const OPENAI_BASE_URL = "https://api.openai.com/v1";
+
+/* Groq retired these IDs (see console.groq.com/docs/deprecations). */
+const RETIRED_GROQ_MODELS = {
+  "llama3-8b-8192": "openai/gpt-oss-20b",
+  "llama3-70b-8192": "openai/gpt-oss-120b",
+  "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+  "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+};
+
+/**
+ * Accept the shapes people actually paste — the marketing site, the bare API
+ * host, a full /chat/completions URL — and reduce them to the base URL that
+ * `${baseUrl}/chat/completions` needs. Every wrong shape here is a silent 404.
+ */
+function normalizeBaseUrl(raw, isGroq) {
+  let url = String(raw || "")
+    .trim()
+    .replace(/\/+$/, "");
+  if (!url) url = isGroq ? GROQ_BASE_URL : OPENAI_BASE_URL;
+
+  url = url.replace(/\/chat\/completions$/i, "");
+  if (/^https?:\/\/(www\.|console\.|api\.)?groq\.com(\/.*)?$/i.test(url)) {
+    return GROQ_BASE_URL;
+  }
+  return url;
+}
+
 /** Read at call time so env vars set after import still work. */
 function aiConfig() {
+  const key = String(process.env.AI_API_KEY || process.env.GROQ_API_KEY || "").trim();
+  const isGroq = /^gsk_/i.test(key);
+  const chosen = String(
+    process.env.AI_MODEL || (isGroq ? "openai/gpt-oss-20b" : "gpt-4o-mini"),
+  ).trim();
+
   return {
-    key: String(process.env.AI_API_KEY || "").trim(),
-    baseUrl: String(process.env.AI_BASE_URL || "https://api.openai.com/v1")
-      .trim()
-      .replace(/\/+$/, ""),
-    model: String(process.env.AI_MODEL || "gpt-4o-mini").trim(),
+    key,
+    baseUrl: normalizeBaseUrl(process.env.AI_BASE_URL, isGroq),
+    model: (isGroq && RETIRED_GROQ_MODELS[chosen]) || chosen,
   };
 }
 
@@ -248,6 +286,11 @@ async function handler(req, res) {
       if (upstream.status === 401 || upstream.status === 403) {
         return send(res, 502, {
           error: `The AI provider rejected your key (${upstream.status}). Check AI_API_KEY and that it matches AI_BASE_URL.`,
+        });
+      }
+      if (upstream.status === 404 && /model/i.test(detail)) {
+        return send(res, 502, {
+          error: `The AI provider doesn't recognise the model "${model}". Set AI_MODEL to one it offers — Groq's current free models include openai/gpt-oss-20b.`,
         });
       }
       if (upstream.status === 429) {
