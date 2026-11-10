@@ -17,6 +17,10 @@
  * ---------------------------------------------------------------------------
  */
 
+import { currentUser } from "./_lib/auth.js";
+import { ensureSchema, hasDatabase, query } from "./_lib/db.js";
+import { readBody, send } from "./_lib/http.js";
+
 const AI_TIMEOUT_MS = 45000;
 const MAX_TOPIC_LENGTH = 400;
 
@@ -101,40 +105,7 @@ function aiConfig() {
   };
 }
 
-function send(res, status, payload) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
-}
-
-/**
- * Vercel usually parses the JSON body for us, but `vercel dev`, Express and
- * plain `node` all differ — so fall back to reading the raw stream.
- */
-async function readBody(req) {
-  if (req.body && typeof req.body === "object") return req.body;
-  if (typeof req.body === "string") {
-    try {
-      return JSON.parse(req.body);
-    } catch {
-      return {};
-    }
-  }
-
-  const chunks = [];
-  try {
-    for await (const chunk of req) chunks.push(chunk);
-  } catch {
-    return {};
-  }
-  if (chunks.length === 0) return {};
-
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    return {};
-  }
-}
+/* send() and readBody() live in api/_lib/http.js, shared with the other routes. */
 
 function buildPrompt({ topic, platform, tone, count }) {
   const target = PLATFORMS[platform];
@@ -253,6 +224,37 @@ async function handler(req, res) {
     return send(res, 400, { error: `Unknown tone "${tone}".` });
   }
 
+  /* Accounts are optional. With no database configured the app still works in
+     guest mode; once DATABASE_URL exists, generating costs one credit. If the
+     account lookup itself breaks, we keep generating rather than take the whole
+     feature down over a database hiccup. */
+  let gating = false;
+  let user = null;
+  if (hasDatabase()) {
+    try {
+      await ensureSchema();
+      user = await currentUser(req);
+      gating = true;
+    } catch (err) {
+      console.error("[generate] accounts unavailable, serving as guest:", err?.message || err);
+    }
+  }
+
+  if (gating) {
+    if (!user) {
+      return send(res, 401, {
+        error: "Sign in to generate captions.",
+        code: "auth_required",
+      });
+    }
+    if (user.credits < 1) {
+      return send(res, 402, {
+        error: "You're out of credits — buy more to keep generating.",
+        code: "no_credits",
+      });
+    }
+  }
+
   const { key, baseUrl, model } = aiConfig();
   if (!key) {
     return send(res, 503, {
@@ -341,10 +343,25 @@ async function handler(req, res) {
       return send(res, 502, { error: "The AI returned an empty caption. Try rephrasing the topic." });
     }
 
+    /* Charge only for a caption the user actually gets. */
+    let credits = null;
+    if (gating && user) {
+      try {
+        const spent = await query(
+          "update app_users set credits = credits - 1 where id = $1 and credits > 0 returning credits",
+          [user.id],
+        );
+        credits = spent.rows[0] ? Number(spent.rows[0].credits) : 0;
+      } catch (err) {
+        console.error("[generate] couldn't charge a credit:", err?.message || err);
+      }
+    }
+
     return send(res, 200, {
       variants,
       model,
       usage: payload?.usage || null,
+      ...(credits === null ? {} : { credits }),
     });
   } catch (err) {
     if (err?.name === "AbortError") {
