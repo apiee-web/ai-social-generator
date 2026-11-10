@@ -1,101 +1,101 @@
 /**
  * api/checkout.js — POST /api/checkout
  * ---------------------------------------------------------------------------
- * The pricing modal calls this when someone picks a plan. With no
- * STRIPE_SECRET_KEY it runs in demo mode: credits are granted, no money moves.
+ * Body: { planId: "starter" | "pro" | "agency" }.
+ *
+ * With accounts and STRIPE_SECRET_KEY in place this creates a real Stripe
+ * Checkout session and returns { url } — the browser follows it. Credits land
+ * on the account when Stripe confirms payment at /api/stripe/webhook, never
+ * when the browser merely returns to the success page.
+ *
+ * With no database it falls back to the old demo behaviour, so the page still
+ * works before accounts are switched on.
  * ---------------------------------------------------------------------------
  */
 
-const PLANS = {
-  starter: { credits: 50 },
-  pro: { credits: 250 },
-  agency: { credits: 1000 },
-};
+import { currentUser } from "./_lib/auth.js";
+import { hasDatabase } from "./_lib/db.js";
+import { fail, methodNotAllowed, noStore, readBody, resolveOrigin, send } from "./_lib/http.js";
+import { getPlan, planSummary } from "./_lib/plans.js";
+import { getStripe, hasStripe } from "./_lib/stripe.js";
 
-function send(res, status, payload) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
-}
+export default async function handler(req, res) {
+  noStore(res);
+  if (req.method !== "POST") return methodNotAllowed(res, "POST");
 
-async function readBody(req) {
-  if (req.body && typeof req.body === "object") return req.body;
-  if (typeof req.body === "string") {
-    try {
-      return JSON.parse(req.body);
-    } catch {
-      return {};
+  try {
+    const body = await readBody(req);
+    const plan = getPlan(body.planId);
+    if (!plan) return send(res, 400, { error: "Unknown plan." });
+
+    /* ---- Before accounts exist: the original no-money demo path ---------- */
+    if (!hasDatabase()) {
+      return send(res, 200, {
+        demo: true,
+        credits: plan.credits,
+        message: "Demo checkout — no payment was taken.",
+      });
     }
-  }
 
-  const chunks = [];
-  try {
-    for await (const chunk of req) chunks.push(chunk);
-  } catch {
-    return {};
-  }
-  if (chunks.length === 0) return {};
+    if (!hasStripe()) {
+      return send(res, 503, {
+        error: "Card payments aren't switched on yet. Add STRIPE_SECRET_KEY in your hosting settings.",
+        code: "stripe_off",
+      });
+    }
 
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    return {};
-  }
-}
+    const user = await currentUser(req);
+    if (!user) {
+      return send(res, 401, {
+        error: "Sign in before buying credits.",
+        code: "auth_required",
+      });
+    }
 
-async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
-    return send(res, 405, { error: "Use POST for this endpoint." });
-  }
+    const origin = resolveOrigin(req);
+    if (!origin) {
+      return send(res, 500, {
+        error: "Couldn't work out this site's address. Set APP_URL in your environment variables.",
+      });
+    }
 
-  const body = await readBody(req);
-  const plan = PLANS[String(body.planId || "")];
-
-  if (!plan) {
-    return send(res, 400, { error: "Unknown plan." });
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /*  DEMO MODE (default): credit the account, take no money.               */
-  /* ---------------------------------------------------------------------- */
-  if (!process.env.STRIPE_SECRET_KEY) {
-    return send(res, 200, {
-      demo: true,
-      credits: plan.credits,
-      message: "Demo checkout — no payment was taken.",
+    const stripe = await getStripe();
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      customer_email: user.email,
+      client_reference_id: user.id,
+      allow_promotion_codes: true,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            unit_amount: plan.cents,
+            product_data: { name: planSummary(plan) },
+          },
+        },
+      ],
+      metadata: {
+        userId: user.id,
+        planId: plan.id,
+        credits: String(plan.credits),
+      },
+      success_url: `${origin}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}/?checkout=cancelled`,
     });
+
+    if (!session?.url) {
+      return send(res, 502, { error: "Stripe didn't return a checkout link. Try again." });
+    }
+
+    return send(res, 200, { url: session.url, planId: plan.id, credits: plan.credits });
+  } catch (err) {
+    if (err?.type === "StripeAuthenticationError") {
+      return send(res, 503, {
+        error: "Stripe rejected the API key. Check STRIPE_SECRET_KEY in your environment variables.",
+        code: "stripe_bad_key",
+      });
+    }
+    return fail(res, err);
   }
-
-  /* ---------------------------------------------------------------------- */
-  /*  REAL PAYMENTS: uncomment after `npm i stripe`.                        */
-  /*                                                                        */
-  /*  const Stripe = require("stripe");                                     */
-  /*  const stripe = Stripe(process.env.STRIPE_SECRET_KEY);                 */
-  /*                                                                        */
-  /*  const session = await stripe.checkout.sessions.create({               */
-  /*    mode: "payment",                                                    */
-  /*    line_items: [{                                                      */
-  /*      quantity: 1,                                                      */
-  /*      price_data: {                                                     */
-  /*        currency: "usd",                                                */
-  /*        unit_amount: 1900,                     // $19.00                */
-  /*        product_data: { name: "Pro — 250 credits" },                    */
-  /*      },                                                                */
-  /*    }],                                                                 */
-  /*    success_url: `${process.env.APP_URL}/?paid=1`,                      */
-  /*    cancel_url: `${process.env.APP_URL}/?paid=0`,                       */
-  /*    metadata: { planId, credits: String(plan.credits) },                */
-  /*  });                                                                   */
-  /*  return send(res, 200, { url: session.url });                          */
-  /*                                                                        */
-  /*  Then credit the account from a Stripe webhook once payment succeeds.  */
-  /* ---------------------------------------------------------------------- */
-
-  return send(res, 501, {
-    error:
-      "Stripe is configured but the checkout route isn't implemented yet. Open api/checkout.js and follow the commented block.",
-  });
 }
-
-export default handler;
