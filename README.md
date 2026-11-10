@@ -72,12 +72,44 @@ credits the balance on `checkout.session.completed`.
    serverless function instead. Never move the key into the React app to avoid
    that, because anyone visiting the site could read it.
 
-## Troubleshooting
+import { SDK } from 'groq';
 
-| Symptom | Cause |
-| --- | --- |
-| Yellow "No AI key found" banner | `.env` is missing, or the server was not restarted after editing it. |
-| "Couldn't reach the AI server" | `npm run server` is not running, or the proxy target/port does not match. |
-| "The AI provider rejected your key (401)" | Wrong key, or the key belongs to a different provider than `AI_BASE_URL`. |
-| "AI provider error: model not found" | `AI_MODEL` is wrong for that provider. |
-| Captions arrive as one long sentence | The model ignored the JSON instruction; try a stronger model. |
+export default async function handler(req, res) {
+  // Beveiliging voor CORS (zorgt dat je frontend met je backend mag praten)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const { topic, platform, tone, includeEmojis, includeHashtags } = req.body;
+
+    // Direct jouw Groq sleutel geactiveerd voor deze test
+    const apiKey = "gsk_JltakaANQFbLUS0dTdgyWGdyb3FYa4KFw4LM4yywSDPFKFWH5Hk";
+    
+    const groq = new SDK({ apiKey: apiKey });
+
+    const prompt = `Write 3 high-quality social media captions for ${platform} about the following topic: "${topic}". The tone should be ${tone}. ${includeEmojis ? 'Include emojis.' : 'No emojis.'} ${includeHashtags ? 'Include hashtags.' : 'No hashtags.'} Return the result as a clean JSON array with 3 string elements only, no markdown formatting.`;
+
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [{ role: 'user', content: prompt }],
+      model: 'openai/gpt-oss-20b',
+    });
+
+    const responseText = chatCompletion.choices[0].message.content;
+    const captions = JSON.parse(responseText.trim());
+
+    return res.status(200).json(captions);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Fout bij het genereren van de AI teksten.' });
+  }
+}
+
