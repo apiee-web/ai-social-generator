@@ -214,6 +214,16 @@ function normalizeVariants(content) {
   return fallbackText ? [{ text: fallbackText, hashtags: [] }] : [];
 }
 
+/** Pull the assistant text out of a chat-completions payload. */
+function readContent(payload) {
+  const message = payload?.choices?.[0]?.message?.content;
+  if (Array.isArray(message)) {
+    return message.map((part) => (typeof part === "string" ? part : part?.text || "")).join("");
+  }
+  if (typeof message === "string") return message;
+  return payload?.choices?.[0]?.text || "";
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Handler                                                                  */
 /* -------------------------------------------------------------------------- */
@@ -254,7 +264,12 @@ async function handler(req, res) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
 
-  try {
+  /* Groq's gpt-oss / qwen models spend part of max_tokens on hidden reasoning,
+     which can eat the whole budget and return an empty caption. Ask for light
+     reasoning where the model supports it. */
+  const tunable = /api\.groq\.com/.test(baseUrl) && /gpt-oss|qwen/i.test(model);
+
+  async function ask() {
     const upstream = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       signal: controller.signal,
@@ -265,7 +280,8 @@ async function handler(req, res) {
       body: JSON.stringify({
         model,
         temperature: 0.85,
-        max_tokens: 1200,
+        max_tokens: 1600,
+        ...(tunable ? { reasoning_effort: "low" } : {}),
         messages: [
           {
             role: "system",
@@ -277,7 +293,11 @@ async function handler(req, res) {
       }),
     });
 
-    const payload = await upstream.json().catch(() => null);
+    return { upstream, payload: await upstream.json().catch(() => null) };
+  }
+
+  try {
+    let { upstream, payload } = await ask();
 
     if (!upstream.ok) {
       const detail =
@@ -302,14 +322,21 @@ async function handler(req, res) {
       return send(res, 502, { error: `AI provider error: ${detail}` });
     }
 
-    const message = payload?.choices?.[0]?.message?.content;
-    const content = Array.isArray(message)
-      ? message.map((part) => (typeof part === "string" ? part : part?.text || "")).join("")
-      : typeof message === "string"
-        ? message
-        : payload?.choices?.[0]?.text || "";
+    let variants = normalizeVariants(readContent(payload));
 
-    const variants = normalizeVariants(content);
+    /* Reasoning models occasionally answer with nothing but thinking. One
+       silent retry is cheaper for the user than an error. */
+    if (variants.length === 0 && !controller.signal.aborted) {
+      const second = await ask();
+      if (second.upstream.ok) {
+        const retried = normalizeVariants(readContent(second.payload));
+        if (retried.length > 0) {
+          variants = retried;
+          payload = second.payload;
+        }
+      }
+    }
+
     if (variants.length === 0) {
       return send(res, 502, { error: "The AI returned an empty caption. Try rephrasing the topic." });
     }
