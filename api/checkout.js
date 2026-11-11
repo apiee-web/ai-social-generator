@@ -5,8 +5,8 @@
  *
  * With accounts and STRIPE_SECRET_KEY in place this creates a real Stripe
  * Checkout session and returns { url } — the browser follows it. Credits land
- * on the account when Stripe confirms payment at /api/stripe/webhook, never
- * when the browser merely returns to the success page.
+ * on the account only when Stripe confirms the payment (/api/stripe/return and
+ * /api/stripe/webhook), never because the page says a payment happened.
  *
  * With no database it falls back to the old demo behaviour, so the page still
  * works before accounts are switched on.
@@ -80,7 +80,10 @@ export default async function handler(req, res) {
         planId: plan.id,
         credits: String(plan.credits),
       },
-      success_url: `${origin}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+      /* Back through our own server first: it confirms the payment with Stripe
+         and credits the account before the buyer sees the page, so the balance
+         is right even if the webhook is delayed or misconfigured. */
+      success_url: `${origin}/api/stripe/return?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/?checkout=cancelled`,
     });
 
