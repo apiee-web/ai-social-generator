@@ -198,7 +198,7 @@ export const CSS = `
 .aisg-plan-tagline { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .aisg-perks { list-style: none; padding: 0; margin: 14px 0 18px; display: grid; gap: 8px; flex: 1; }
 .aisg-perks li { position: relative; padding-left: 20px; font-size: 13px; line-height: 1.45; color: #3b4064; }
-.aisg-perks li::before { content: "✓"; position: absolute; left: 0; top: 0; color: var(--ok); font-weight: 800; font-size: 12px; }
+.aisg-perks li::before { content: "\u2713"; position: absolute; left: 0; top: 0; color: var(--ok); font-weight: 800; font-size: 12px; }
 .aisg-modal-error { margin-top: 4px; }
 .aisg-fineprint { font-size: 11.5px; color: var(--muted); text-align: center; line-height: 1.6; margin-top: 4px; }
 
@@ -208,6 +208,24 @@ export const CSS = `
   .aisg-submit { grid-column: 1 / -1; }
   .aisg-plans { grid-template-columns: 1fr; }
   .aisg-head { align-items: flex-start; }
-  .aisg-wallet { width: 100%; justify-content: space-between; }
+  .aisg-wallet { width: 100%; justify-content: flex-start; gap: 10px; }
+  .aisg-user {
+    width: 100%; justify-content: space-between;
+    padding-top: 12px; margin-top: 2px;
+    border-top: 1px solid var(--line);
+  }
+  .aisg-account { flex: 1 1 auto; }
+  .aisg-who { max-width: min(52vw, 260px); font-size: 13px; }
+  .aisg-logout { flex: none; }
+}
+
+@media (max-width: 420px) {
+  .aisg-wallet { flex-direction: column; align-items: stretch; }
+  .aisg-credits { justify-content: center; }
+  .aisg-wallet > .aisg-btn { width: 100%; }
+  .aisg-user { flex-direction: column; align-items: stretch; gap: 10px; }
+  .aisg-account { justify-content: center; }
+  .aisg-who { max-width: 100%; text-align: center; }
+  .aisg-logout { width: 100%; }
 }
 `;
