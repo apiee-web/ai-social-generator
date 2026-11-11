@@ -4,17 +4,19 @@
  * A complete, self-contained screen that:
  *   • sends the user's idea to your own backend (/api/generate), which calls a
  *     real LLM. The API key lives on the server, never in this file.
- *   • counts credits in the header, persists them in localStorage, and charges
- *     1 credit per generation (refunded automatically if the request fails).
- *   • opens a pricing modal when credits run out, with a working demo checkout
- *     that tops the balance up (swap in Stripe later — see README).
+ *   • shows a sign-in / create-account modal. Once accounts are live, credits
+ *     live on the server per email — signing in from another phone shows the
+ *     same balance.
+ *   • falls back to guest mode (credits in localStorage) until the backend has
+ *     accounts configured, so the page always works.
+ *   • opens a pricing modal whose buttons start a real Stripe Checkout session;
+ *     credits are added by the Stripe webhook, not by this page.
  *
- * Requires: React 18+, and server.cjs running (it is the AI proxy).
- * Drop-in: copy this file over src/App.jsx and follow README.md.
+ * Requires: React 18+.
  * ---------------------------------------------------------------------------
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /* -------------------------------------------------------------------------- */
 /*  Config — the numbers you will most likely want to change                  */
@@ -22,7 +24,7 @@ import { useEffect, useRef, useState } from "react";
 
 const FREE_CREDITS = 3; // credits a brand-new visitor starts with
 const CREDIT_COST = 1; // credits charged per generation
-const CREDITS_KEY = "aisg:credits:v1"; // localStorage key for the balance
+const CREDITS_KEY = "aisg:credits:v1"; // localStorage key for the guest balance
 const RESULTS_KEY = "aisg:results:v1"; // localStorage key for past captions
 const MAX_RESULTS = 8; // how many past generations to keep in the list
 
@@ -42,6 +44,7 @@ const TONES = [
   { id: "inspirational", label: "Inspirational" },
 ];
 
+/* Display copy only — the real prices are in api/_lib/plans.js. */
 const PLANS = [
   {
     id: "starter",
@@ -115,7 +118,7 @@ function cleanHashtags(hashtags) {
   return hashtags
     .map((tag) => String(tag).trim())
     .filter(Boolean)
-    .map((tag) => (tag.startsWith("#") ? tag : `#${tag.replace(/^#+/, "")}`));
+    .map((tag) => (tag.startsWith("#") ? tag : `#${tag.replace(/^#+/g, "")}`));
 }
 
 /** Caption body + hashtags, exactly as it should be pasted into the app. */
@@ -157,10 +160,17 @@ async function copyText(text) {
 export default function App({ apiBase = "" }) {
   const base = apiBase.replace(/\/+$/, "");
 
-  const [credits, setCredits] = useState(() => {
+  /* Accounts: until /api/auth/me answers, we don't know which mode we're in. */
+  const [accountsEnabled, setAccountsEnabled] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [user, setUser] = useState(null);
+  const [authOpen, setAuthOpen] = useState(false);
+
+  const [guestCredits, setGuestCredits] = useState(() => {
     const stored = Number(readStorage(CREDITS_KEY, FREE_CREDITS));
     return Number.isFinite(stored) && stored >= 0 ? stored : FREE_CREDITS;
   });
+
   const [results, setResults] = useState(() => {
     const stored = readStorage(RESULTS_KEY, []);
     return Array.isArray(stored) ? stored.slice(0, MAX_RESULTS) : [];
@@ -184,8 +194,91 @@ export default function App({ apiBase = "" }) {
   const copyTimer = useRef(null);
   const noticeTimer = useRef(null);
 
-  /* Persist the balance and the history so a refresh doesn't lose them. */
-  useEffect(() => writeStorage(CREDITS_KEY, credits), [credits]);
+  /* Cloud mode means the balance is the server's, not this browser's. */
+  const cloud = accountsEnabled && sessionReady;
+  const credits = cloud ? (user?.credits ?? 0) : guestCredits;
+
+  function flash(message) {
+    setNotice(message);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), 6000);
+  }
+
+  const refreshSession = useCallback(async () => {
+    try {
+      const response = await fetch(`${base}/api/auth/me`, {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+
+      /* 503 = accounts aren't configured on the server: guest mode. */
+      if (response.status === 503) {
+        setAccountsEnabled(false);
+        setUser(null);
+        return;
+      }
+
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        setAccountsEnabled(true);
+        setUser(data.user || null);
+      }
+    } catch {
+      /* Offline or static host — guest mode keeps the page usable. */
+      setAccountsEnabled(false);
+    } finally {
+      setSessionReady(true);
+    }
+  }, [base]);
+
+  /* First load: who is signed in, and did we just come back from Stripe? */
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      await refreshSession();
+      if (!alive) return;
+
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const state = params.get("checkout");
+        if (state === "success") {
+          setNotice("Payment received — your new credits will appear in a moment.");
+          if (noticeTimer.current) clearTimeout(noticeTimer.current);
+          noticeTimer.current = setTimeout(() => setNotice(null), 9000);
+          /* The webhook may land a second after the redirect; check twice. */
+          setTimeout(() => {
+            if (alive) refreshSession();
+          }, 2500);
+        } else if (state === "cancelled") {
+          setNotice("Checkout cancelled — no charge was made.");
+          if (noticeTimer.current) clearTimeout(noticeTimer.current);
+          noticeTimer.current = setTimeout(() => setNotice(null), 6000);
+        }
+        if (state) {
+          params.delete("checkout");
+          params.delete("session_id");
+          const query = params.toString();
+          window.history.replaceState(
+            {},
+            "",
+            `${window.location.pathname}${query ? `?${query}` : ""}`
+          );
+        }
+      } catch {
+        /* older browsers — no harm */
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [refreshSession]);
+
+  /* Guests still get a remembered balance; signed-in users don't need one. */
+  useEffect(() => {
+    if (!cloud) writeStorage(CREDITS_KEY, guestCredits);
+  }, [guestCredits, cloud]);
   useEffect(() => writeStorage(RESULTS_KEY, results), [results]);
 
   /* Tell the user up front if the server has no AI key configured. */
@@ -212,15 +305,16 @@ export default function App({ apiBase = "" }) {
     []
   );
 
-  function flash(message) {
-    setNotice(message);
-    if (noticeTimer.current) clearTimeout(noticeTimer.current);
-    noticeTimer.current = setTimeout(() => setNotice(null), 5000);
-  }
-
   async function handleGenerate(event) {
     event?.preventDefault?.();
     if (loading) return;
+
+    /* Signed-out visitors get the login modal instead of a failed request. */
+    if (cloud && !user) {
+      setError(null);
+      setAuthOpen(true);
+      return;
+    }
 
     const idea = topic.trim();
     if (!idea) {
@@ -235,20 +329,41 @@ export default function App({ apiBase = "" }) {
     setError(null);
     setNotice(null);
     setLoading(true);
-    setCredits((value) => value - CREDIT_COST); // charge up front, refund below
+
+    /* Guests are charged here and refunded below if it fails. Signed-in users
+       are charged by the server, which returns the new balance. */
+    let chargedUpFront = false;
+    if (!cloud) {
+      setGuestCredits((value) => value - CREDIT_COST);
+      chargedUpFront = true;
+    }
 
     try {
       const response = await fetch(`${base}/api/generate`, {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic: idea, platform, tone, count: 3 }),
       });
       const data = await response.json().catch(() => ({}));
+
+      if (response.status === 401) {
+        setAuthOpen(true);
+        return;
+      }
+      if (response.status === 402) {
+        setPricingOpen(true);
+        return;
+      }
       if (!response.ok) {
         throw new Error(data.error || `The server replied with ${response.status}.`);
       }
       if (!Array.isArray(data.variants) || data.variants.length === 0) {
         throw new Error("The AI sent back an empty answer. Try again.");
+      }
+
+      if (cloud && typeof data.credits === "number") {
+        setUser((current) => (current ? { ...current, credits: data.credits } : current));
       }
 
       const entry = {
@@ -264,11 +379,11 @@ export default function App({ apiBase = "" }) {
       };
       setResults((previous) => [entry, ...previous].slice(0, MAX_RESULTS));
     } catch (err) {
-      setCredits((value) => value + CREDIT_COST); // failed generation is free
+      if (chargedUpFront) setGuestCredits((value) => value + CREDIT_COST);
       const message = String(err?.message || err);
       setError(
         err instanceof TypeError
-          ? "Couldn't reach the AI server. Is `node server.cjs` running on port 8787?"
+          ? "Couldn't reach the AI server. Check your connection and try again."
           : message
       );
     } finally {
@@ -278,12 +393,21 @@ export default function App({ apiBase = "" }) {
 
   async function handlePurchase(plan) {
     if (purchasing) return;
+
+    /* No account yet? Sign in first, then come back to the plan. */
+    if (cloud && !user) {
+      setPricingOpen(false);
+      setAuthOpen(true);
+      return;
+    }
+
     setPurchasing(plan.id);
     setPricingError(null);
 
     try {
       const response = await fetch(`${base}/api/checkout`, {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ planId: plan.id }),
       });
@@ -291,24 +415,43 @@ export default function App({ apiBase = "" }) {
 
       /* Real Stripe Checkout: the server hands back a URL, we follow it. */
       if (response.ok && data.url) {
-        window.location.href = data.url;
+        window.location.assign(data.url);
         return;
       }
-      if (!response.ok) {
-        throw new Error(data.error || `Checkout failed (${response.status}).`);
-      }
-      if (typeof data.credits === "number" && data.credits > 0) {
-        setCredits((value) => value + data.credits);
+      if (response.status === 401) {
         setPricingOpen(false);
-        flash(
-          `Added ${data.credits} credits${data.demo ? " (demo mode — no payment was taken)." : "."}`
-        );
+        setAuthOpen(true);
+        return;
       }
+      if (response.ok && data.demo) {
+        setGuestCredits((value) => value + data.credits);
+        setPricingOpen(false);
+        flash(`Added ${data.credits} credits (demo mode — no payment was taken).`);
+        return;
+      }
+      throw new Error(data.error || `Checkout failed (${response.status}).`);
     } catch (err) {
       setPricingError(String(err?.message || err));
     } finally {
       setPurchasing(null);
     }
+  }
+
+  async function handleSignOut() {
+    try {
+      await fetch(`${base}/api/auth/logout`, { method: "POST", credentials: "same-origin" });
+    } catch {
+      /* even if the request fails the cookie is cleared on reload */
+    }
+    setUser(null);
+    flash("Signed out. Your credits stay on your account.");
+    refreshSession();
+  }
+
+  function handleAuthed(nextUser) {
+    setUser(nextUser);
+    setAuthOpen(false);
+    flash(`Signed in as ${nextUser.email}.`);
   }
 
   async function handleCopy(text, id) {
@@ -329,6 +472,7 @@ export default function App({ apiBase = "" }) {
 
   const selectedPlatform = PLATFORM_MAP[platform] || PLATFORMS[0];
   const creditWord = credits === 1 ? "credit" : "credits";
+  const needsSignIn = cloud && !user;
 
   return (
     <div className="aisg">
@@ -362,14 +506,30 @@ export default function App({ apiBase = "" }) {
             >
               Buy credits
             </button>
+            {cloud &&
+              (user ? (
+                <button type="button" className="aisg-link aisg-account" onClick={handleSignOut}>
+                  <span className="aisg-who" title={user.email}>
+                    {user.email}
+                  </span>
+                  <span>Sign out</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="aisg-btn aisg-btn-outline"
+                  onClick={() => setAuthOpen(true)}
+                >
+                  Sign in
+                </button>
+              ))}
           </div>
         </header>
 
         {keyMissing && (
           <div className="aisg-warn" role="status">
-            <strong>No AI key found.</strong> Add <code>AI_API_KEY</code> to your{" "}
-            <code>.env</code> file and restart the server — generation can't work until
-            you do.
+            <strong>No AI key found.</strong> Add <code>AI_API_KEY</code> to your environment
+            and redeploy — generation can't work until you do.
           </div>
         )}
 
@@ -441,9 +601,11 @@ export default function App({ apiBase = "" }) {
           </div>
 
           <p className="aisg-hint">
-            {credits > 0
-              ? `${credits} ${creditWord} left · each generation returns 3 options for ${selectedPlatform.label}`
-              : "You're out of credits — buy more to keep generating."}
+            {needsSignIn
+              ? "Sign in to start — a new account comes with 3 free credits."
+              : credits > 0
+                ? `${credits} ${creditWord} left · each generation returns 3 options for ${selectedPlatform.label}`
+                : "You're out of credits — buy more to keep generating."}
           </p>
         </form>
 
@@ -496,8 +658,17 @@ export default function App({ apiBase = "" }) {
         credits={credits}
         purchasing={purchasing}
         error={pricingError}
+        cloud={cloud}
+        signedIn={Boolean(user)}
         onClose={() => setPricingOpen(false)}
         onSelect={handlePurchase}
+      />
+
+      <AuthModal
+        open={authOpen}
+        base={base}
+        onClose={() => setAuthOpen(false)}
+        onAuthed={handleAuthed}
       />
     </div>
   );
@@ -565,7 +736,7 @@ function LoadingCard() {
   );
 }
 
-function PricingModal({ open, credits, purchasing, error, onClose, onSelect }) {
+function PricingModal({ open, credits, purchasing, error, cloud, signedIn, onClose, onSelect }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event) => {
@@ -628,7 +799,11 @@ function PricingModal({ open, credits, purchasing, error, onClose, onSelect }) {
                 onClick={() => onSelect(plan)}
                 disabled={Boolean(purchasing)}
               >
-                {purchasing === plan.id ? "Opening checkout…" : `Get ${plan.credits} credits`}
+                {purchasing === plan.id
+                  ? "Opening checkout…"
+                  : cloud && !signedIn
+                    ? "Sign in to buy"
+                    : `Get ${plan.credits} credits`}
               </button>
             </div>
           ))}
@@ -641,9 +816,183 @@ function PricingModal({ open, credits, purchasing, error, onClose, onSelect }) {
         )}
 
         <p className="aisg-fineprint">
-          Credits never expire. Payments are simulated in demo mode — connect Stripe in{" "}
-          <code>server.cjs</code> to charge real money (README has the steps).
+          {cloud && signedIn
+            ? "Secure payment by Stripe. You'll be returned here automatically and the credits are added to your account the moment payment clears."
+            : cloud
+              ? "Sign in first — credits are tied to your email so they follow you to any device."
+              : "Demo mode: no card is charged until accounts and Stripe are connected."}
         </p>
+      </div>
+    </div>
+  );
+}
+
+function AuthModal({ open, base, onClose, onAuthed }) {
+  const [mode, setMode] = useState("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (open) setError(null);
+  }, [open]);
+
+  if (!open) return null;
+
+  const signingUp = mode === "signup";
+
+  async function submit(event) {
+    event.preventDefault();
+    if (busy) return;
+
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError("Enter your email address.");
+      return;
+    }
+    if (signingUp && password.length < 8) {
+      setError("Use at least 8 characters for your password.");
+      return;
+    }
+    if (!password) {
+      setError("Enter your password.");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${base}/api/auth/${signingUp ? "signup" : "login"}`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: cleanEmail, password }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.user) {
+        throw new Error(data.error || `Couldn't sign you in (${response.status}).`);
+      }
+
+      setPassword("");
+      onAuthed(data.user);
+    } catch (err) {
+      const message = String(err?.message || err);
+      setError(
+        err instanceof TypeError
+          ? "Couldn't reach the server. Check your connection and try again."
+          : message
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="aisg-overlay"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="aisg-modal aisg-auth-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="aisg-auth-title"
+      >
+        <button type="button" className="aisg-close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+
+        <h2 id="aisg-auth-title">{signingUp ? "Create your account" : "Sign in"}</h2>
+        <p className="aisg-modal-sub">
+          {signingUp
+            ? "Your credits are saved to this email, so they follow you to any device. New accounts get 3 free credits."
+            : "Enter the email and password you signed up with."}
+        </p>
+
+        <form className="aisg-auth-form" onSubmit={submit}>
+          <div className="aisg-field">
+            <label className="aisg-label aisg-label-small" htmlFor="aisg-email">
+              Email
+            </label>
+            <input
+              id="aisg-email"
+              className="aisg-input"
+              type="email"
+              autoComplete="email"
+              inputMode="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          </div>
+
+          <div className="aisg-field">
+            <label className="aisg-label aisg-label-small" htmlFor="aisg-password">
+              Password
+            </label>
+            <input
+              id="aisg-password"
+              className="aisg-input"
+              type="password"
+              autoComplete={signingUp ? "new-password" : "current-password"}
+              placeholder={signingUp ? "At least 8 characters" : "Your password"}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </div>
+
+          {error && (
+            <p className="aisg-error aisg-modal-error" role="alert">
+              {error}
+            </p>
+          )}
+
+          <button type="submit" className="aisg-btn aisg-btn-primary aisg-btn-full" disabled={busy}>
+            {busy ? (
+              <>
+                <span className="aisg-spinner" aria-hidden="true" />{" "}
+                {signingUp ? "Creating account…" : "Signing in…"}
+              </>
+            ) : signingUp ? (
+              "Create account"
+            ) : (
+              "Sign in"
+            )}
+          </button>
+
+          <p className="aisg-auth-switch">
+            {signingUp ? "Already have an account?" : "New here?"}{" "}
+            <button
+              type="button"
+              className="aisg-link"
+              onClick={() => {
+                setMode(signingUp ? "signin" : "signup");
+                setError(null);
+              }}
+            >
+              {signingUp ? "Sign in" : "Create one"}
+            </button>
+          </p>
+        </form>
       </div>
     </div>
   );
@@ -692,7 +1041,7 @@ const CSS = `
 .aisg-brand h1 { font-size: 20px; letter-spacing: -0.02em; }
 .aisg-brand p { font-size: 13px; color: var(--muted); margin-top: 2px; }
 
-.aisg-wallet { display: flex; align-items: center; gap: 10px; }
+.aisg-wallet { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .aisg-credits {
   display: flex; align-items: baseline; gap: 5px;
   background: var(--card); border: 1px solid var(--line);
@@ -701,6 +1050,15 @@ const CSS = `
 }
 .aisg-credits strong { font-size: 16px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .aisg-credits-label { font-size: 12px; }
+.aisg-account {
+  display: flex; align-items: center; gap: 8px; text-decoration: none;
+  background: none; border: none; font: inherit; cursor: pointer; color: var(--muted);
+}
+.aisg-account:hover { color: var(--ink); }
+.aisg-who {
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px;
+}
 
 .aisg-card {
   background: var(--card); border: 1px solid var(--line); border-radius: 18px;
@@ -802,6 +1160,7 @@ const CSS = `
   border-radius: 22px; padding: 30px 26px 24px; border: 1px solid var(--line);
   box-shadow: 0 40px 80px -30px rgba(12, 14, 35, 0.6); margin: auto;
 }
+.aisg-auth-modal { max-width: 420px; }
 .aisg-modal h2 { font-size: 21px; letter-spacing: -0.02em; }
 .aisg-modal-sub { font-size: 13.5px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
 .aisg-close {
@@ -810,6 +1169,9 @@ const CSS = `
   font-size: 20px; line-height: 1; cursor: pointer;
 }
 .aisg-close:hover { background: #e9ebf8; color: var(--ink); }
+
+.aisg-auth-form { display: grid; gap: 14px; margin-top: 20px; }
+.aisg-auth-switch { font-size: 12.5px; color: var(--muted); text-align: center; }
 
 .aisg-plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 22px 0 14px; }
 .aisg-plan { position: relative; border: 1px solid var(--line); border-radius: 16px; padding: 18px 16px; background: #fcfcff; display: flex; flex-direction: column; }
