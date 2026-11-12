@@ -126,10 +126,16 @@ const SCHEMA = [
      audience text not null,
      offer text not null,
      tone text not null,
+     example_posts text,
+     voice_dna text,
      created_at timestamptz not null default now(),
      updated_at timestamptz not null default now()
    )`,
   `create index if not exists brand_vaults_user_idx on brand_vaults (user_id)`,
+  /* Voice DNA: the pasted posts and the style fingerprint cut from them. */
+  `alter table brand_vaults add column if not exists example_posts text`,
+  `alter table brand_vaults add column if not exists voice_dna text`,
+  `alter table brand_vaults add column if not exists voice_dna_at timestamptz`,
 ];
 
 export async function ensureSchema() {
