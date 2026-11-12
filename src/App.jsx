@@ -5,7 +5,9 @@
  *   • keeps a Brand Vault per account (/api/brand) and writes with it
  *   • turns one idea into LinkedIn, Instagram/Facebook and TikTok at once
  *     (/api/generate), with the anti-cliché voice rules applied server-side
- *   • shows accounts, plan status and unlimited usage from /api/auth/me
+ *   • shows accounts, plan status and usage from /api/auth/me
+ *   • locks the generator until the address is confirmed, with a banner that
+ *     resends the email or takes the six-digit code (/api/auth/verify)
  *   • opens a subscription pricing modal (Creator €19 / Agency €49) whose
  *     buttons start a real monthly Stripe Checkout session
  *   • still works in guest mode (credits in localStorage) when the backend has
@@ -25,6 +27,7 @@ import BrandVaultPanel from "./BrandVaultPanel.jsx";
 import GeneratorForm from "./GeneratorForm.jsx";
 import PricingModal from "./PricingModal.jsx";
 import ResultsSection from "./ResultsSection.jsx";
+import VerifyBanner from "./VerifyBanner.jsx";
 import {
   CREDIT_COST,
   CREDITS_KEY,
@@ -78,6 +81,13 @@ export default function App({ apiBase = "" }) {
 
   const [keyMissing, setKeyMissing] = useState(false);
 
+  /* Email verification */
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyNote, setVerifyNote] = useState(null);
+  const [verifyError, setVerifyError] = useState(null);
+  const [verifyLink, setVerifyLink] = useState(null);
+
   /* Brand Vault */
   const [vaults, setVaults] = useState([]);
   const [brandId, setBrandId] = useState("");
@@ -92,7 +102,11 @@ export default function App({ apiBase = "" }) {
   const cloud = accountsEnabled && sessionReady;
   const unlimited = Boolean(user?.unlimited);
   const credits = cloud ? (user?.credits ?? 0) : guestCredits;
+  const creditTotal = Number(user?.freeCredits) || FREE_CREDITS;
+  const needsSignIn = cloud && !user;
   const selectedBrand = vaults.find((vault) => vault.id === brandId) || null;
+  const verified = !user || user.emailVerified !== false;
+  const outOfCredits = !unlimited && !needsSignIn && credits < CREDIT_COST;
 
   function flash(message) {
     setNotice(message);
@@ -153,7 +167,8 @@ export default function App({ apiBase = "" }) {
     }
   }, [base, cloud, user]);
 
-  /* First load: who is signed in, and did we just come back from Stripe? */
+  /* First load: who is signed in, did we just come back from Stripe, and is
+     this a verification link? */
   useEffect(() => {
     let alive = true;
 
@@ -163,7 +178,9 @@ export default function App({ apiBase = "" }) {
 
       try {
         const params = new URLSearchParams(window.location.search);
+        const token = params.get("verify");
         const state = params.get("checkout");
+
         if (state === "success") {
           setNotice("Payment received — your plan and credits are syncing.");
           if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -177,9 +194,27 @@ export default function App({ apiBase = "" }) {
           if (noticeTimer.current) clearTimeout(noticeTimer.current);
           noticeTimer.current = setTimeout(() => setNotice(null), 6000);
         }
-        if (state) {
+
+        if (token) {
+          const response = await fetch(`${base}/api/auth/verify`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token }),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (response.ok) {
+            if (alive && data.user) setUser(data.user);
+            flash("Email confirmed — your free test credits are unlocked.");
+          } else {
+            setVerifyError(String(data.error || "That link didn't work. Use the code below."));
+          }
+        }
+
+        if (state || token) {
           params.delete("checkout");
           params.delete("session_id");
+          params.delete("verify");
           const query = params.toString();
           window.history.replaceState(
             {},
@@ -195,7 +230,7 @@ export default function App({ apiBase = "" }) {
     return () => {
       alive = false;
     };
-  }, [refreshSession]);
+  }, [base, refreshSession]);
 
   useEffect(() => {
     loadVaults();
@@ -242,6 +277,12 @@ export default function App({ apiBase = "" }) {
       return;
     }
 
+    /* No confirmation yet: point at the banner instead of spending a request. */
+    if (cloud && user && user.emailVerified === false) {
+      setError("Confirm your email first — the verification banner above has the code box.");
+      return;
+    }
+
     const idea = topic.trim();
     if (!idea) {
       setError("Write the idea first — one or two sentences is plenty.");
@@ -281,6 +322,11 @@ export default function App({ apiBase = "" }) {
         setPricingOpen(true);
         return;
       }
+      if (response.status === 403 && data.code === "email_unverified") {
+        await refreshSession();
+        setError(data.error || "Verify your email address first.");
+        return;
+      }
       if (!response.ok) {
         throw new Error(data.error || `The server replied with ${response.status}.`);
       }
@@ -290,6 +336,11 @@ export default function App({ apiBase = "" }) {
 
       if (cloud && typeof data.credits === "number") {
         setUser((current) => (current ? { ...current, credits: data.credits } : current));
+        if (data.credits < 1 && !unlimited) {
+          flash(
+            `That was your last free test credit. The button above now opens the plans — nothing is charged until you choose one.`
+          );
+        }
       }
 
       const entry = {
@@ -298,6 +349,7 @@ export default function App({ apiBase = "" }) {
         tone,
         toneLabel: TONE_MAP[tone]?.label || "",
         brandName: data.brand?.name || null,
+        language: data.detectedLanguage || data.channels?.detectedLanguage || null,
         channels: {
           linkedin: { text: String(data.channels.linkedin?.text || "").trim() },
           instagram: {
@@ -324,6 +376,67 @@ export default function App({ apiBase = "" }) {
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleVerifyCode(event) {
+    event?.preventDefault?.();
+    if (verifyBusy || !user) return;
+
+    setVerifyBusy(true);
+    setVerifyError(null);
+    setVerifyNote(null);
+    try {
+      const response = await fetch(`${base}/api/auth/verify`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: user.email, code: verifyCode }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Couldn't verify that (${response.status}).`);
+
+      if (data.user) setUser(data.user);
+      setVerifyCode("");
+      setVerifyLink(null);
+      flash("Email confirmed — your free test credits are unlocked.");
+    } catch (err) {
+      setVerifyError(String(err?.message || err));
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
+
+  async function handleResend() {
+    if (verifyBusy || !user) return;
+
+    setVerifyBusy(true);
+    setVerifyError(null);
+    setVerifyNote(null);
+    try {
+      const response = await fetch(`${base}/api/auth/resend`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: user.email }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (data.url) setVerifyLink(data.url);
+      if (!response.ok) {
+        throw new Error(data.error || `Couldn't resend that (${response.status}).`);
+      }
+      setVerifyNote(
+        data.sent
+          ? `Sent again to ${user.email}. It can take a minute or two — check spam too.`
+          : data.alreadyVerified
+            ? "This address is already confirmed."
+            : "No mail provider is configured on this deploy, so use the link below."
+      );
+    } catch (err) {
+      setVerifyError(String(err?.message || err));
+    } finally {
+      setVerifyBusy(false);
     }
   }
 
@@ -431,14 +544,30 @@ export default function App({ apiBase = "" }) {
     setTopic("");
     setVaults([]);
     setBrandId("");
+    setVerifyCode("");
+    setVerifyNote(null);
+    setVerifyError(null);
+    setVerifyLink(null);
     setAuthOpen(true); // straight back to the sign-in screen
     flash("You're logged out. Your plan and Brand Vault are safe on your account.");
     refreshSession();
   }
 
-  function handleAuthed(nextUser) {
+  function handleAuthed(nextUser, verification) {
     setUser(nextUser);
     setAuthOpen(false);
+    if (nextUser?.emailVerified === false) {
+      setVerifyCode("");
+      setVerifyError(null);
+      setVerifyNote(
+        verification?.sent
+          ? "Check your inbox — the link and code are on their way."
+          : null
+      );
+      setVerifyLink(verification?.url || null);
+      flash("One step left: confirm your email to unlock your 5 free test credits.");
+      return;
+    }
     flash(`Signed in as ${nextUser.email}.`);
   }
 
@@ -458,8 +587,7 @@ export default function App({ apiBase = "" }) {
     flash("History cleared. Your plan and credits are untouched.");
   }
 
-  const creditWord = credits === 1 ? "generation" : "generations";
-  const needsSignIn = cloud && !user;
+  const creditWord = credits === 1 ? "free test credit left" : "free test credits left";
 
   return (
     <div className="aisg">
@@ -469,6 +597,7 @@ export default function App({ apiBase = "" }) {
       <div className="aisg-shell">
         <BrandHeader
           credits={credits}
+          creditTotal={creditTotal}
           creditWord={creditWord}
           unlimited={unlimited}
           plan={user?.plan}
@@ -489,7 +618,21 @@ export default function App({ apiBase = "" }) {
           </div>
         )}
 
-        {cloud && user && (
+        {cloud && user && user.emailVerified === false && (
+          <VerifyBanner
+            email={user.email}
+            code={verifyCode}
+            onCode={setVerifyCode}
+            busy={verifyBusy}
+            note={verifyNote}
+            error={verifyError}
+            fallbackUrl={verifyLink}
+            onResend={handleResend}
+            onVerify={handleVerifyCode}
+          />
+        )}
+
+        {cloud && user && user.emailVerified !== false && (
           <BrandVaultPanel
             vaults={vaults}
             limit={vaultLimit}
@@ -511,9 +654,16 @@ export default function App({ apiBase = "" }) {
           loading={loading}
           unlimited={unlimited}
           credits={credits}
+          creditTotal={creditTotal}
           creditWord={creditWord}
           needsSignIn={needsSignIn}
+          verified={verified}
+          outOfCredits={outOfCredits}
           brand={selectedBrand}
+          onUpgrade={() => {
+            setPricingError(null);
+            setPricingOpen(true);
+          }}
           onSubmit={handleGenerate}
         />
 
