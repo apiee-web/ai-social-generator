@@ -91,11 +91,18 @@ const SCHEMA = [
      id text primary key,
      email text not null unique,
      password_hash text not null,
-     credits integer not null default 0,
+     credits integer not null default 5,
      plan text not null default 'free',
      created_at timestamptz not null default now(),
      last_login_at timestamptz
    )`,
+  /* Email verification. Existing accounts default to verified, so adding the
+     column can't lock anyone who was already using the app out. */
+  `alter table app_users add column if not exists email_verified boolean not null default true`,
+  `alter table app_users add column if not exists verification_token text`,
+  `alter table app_users add column if not exists verification_hash text`,
+  `alter table app_users add column if not exists verification_expires timestamptz`,
+  `alter table app_users add column if not exists verification_sent_at timestamptz`,
   /* Subscription state, added in place so existing accounts keep working. */
   `alter table app_users add column if not exists subscription_status text`,
   `alter table app_users add column if not exists stripe_customer_id text`,

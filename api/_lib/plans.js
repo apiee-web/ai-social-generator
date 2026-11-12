@@ -9,11 +9,12 @@
  *   agency  — €49/month, up to 5 Brand Vault profiles
  *
  * Free accounts get FREE_CREDITS generations and one vault, so the product is
- * usable (and worth upgrading) before anyone pays.
+ * usable (and worth upgrading) before anyone pays. The credits only unlock
+ * once the address is verified — see api/_lib/verify.js.
  * ---------------------------------------------------------------------------
  */
 
-export const FREE_CREDITS = 3;
+export const FREE_CREDITS = 5;
 export const FREE_VAULTS = 1;
 
 export const PLANS = {

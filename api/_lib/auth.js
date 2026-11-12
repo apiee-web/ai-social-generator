@@ -13,7 +13,7 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 import { ensureSchema, query } from "./db.js";
-import { vaultLimit, isSubscribed } from "./plans.js";
+import { FREE_CREDITS, vaultLimit, isSubscribed } from "./plans.js";
 
 const COOKIE_NAME = "sp_studio_session";
 export const SESSION_DAYS = 30;
@@ -173,7 +173,7 @@ export async function currentUser(req) {
 
   await ensureSchema();
   const { rows } = await query(
-    `select id, email, credits, plan, subscription_status, current_period_end
+    `select id, email, credits, plan, subscription_status, current_period_end, email_verified
        from app_users where id = $1`,
     [session.sub],
   );
@@ -187,16 +187,20 @@ export async function currentUser(req) {
     plan: row.plan || "free",
     subscriptionStatus: row.subscription_status || null,
     subscribed: isSubscribed(row.plan, row.subscription_status),
+    emailVerified: row.email_verified !== false,
   };
 }
 
 /** What the browser is allowed to see. */
 export function publicUser(user) {
+  const status = user.subscriptionStatus ?? user.subscription_status ?? null;
   return {
     email: user.email,
     credits: Number(user.credits),
     plan: user.plan || "free",
-    unlimited: isSubscribed(user.plan, user.subscriptionStatus),
-    vaultLimit: vaultLimit(user.plan, user.subscriptionStatus),
+    unlimited: isSubscribed(user.plan, status),
+    vaultLimit: vaultLimit(user.plan, status),
+    emailVerified: user.emailVerified ?? (user.email_verified !== false),
+    freeCredits: FREE_CREDITS,
   };
 }
