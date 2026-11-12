@@ -3,10 +3,12 @@
  * ---------------------------------------------------------------------------
  * One idea in, three channels out: LinkedIn, Instagram/Facebook and a TikTok /
  * Reels script. If the account has a Brand Vault profile, its context is
- * injected into the prompt so the user never repeats themselves.
+ * injected into the prompt so the user never repeats themselves — and if that
+ * profile has Voice DNA, the measured style fingerprint goes in too.
  *
  * The language of the idea decides the language of the whole answer: the model
- * reports `detected_language` first and every field must follow it exactly.
+ * reports `detected_language` first and every field must follow it exactly,
+ * even when the Voice DNA was measured from posts in another language.
  *
  * The AI key lives in the Vercel project's Environment Variables, so the
  * browser bundle never sees it. Any OpenAI-compatible provider works — switch
@@ -119,6 +121,17 @@ function buildPrompt({ topic, tone, brand }) {
       ]
     : ["No saved brand profile — stay concrete about the idea and avoid invented facts."];
 
+  /* Voice DNA outranks the generic tone wording: it is this person's own
+     fingerprint, measured from posts they actually wrote. */
+  const voiceDna = truthy(brand?.voiceDna)
+    ? [
+        "",
+        "VOICE DNA — the writer's measured fingerprint. Match it closely in every channel; it outranks the generic tone wording above:",
+        String(brand.voiceDna).trim(),
+        "Take the style from it, never the language: the answer is still 100% detected_language, even when the examples were written in another language. Do not copy their topics, sentences or facts — copy how they write.",
+      ]
+    : [];
+
   return [
     "You are a senior content strategist writing one idea for three channels at once.",
     "",
@@ -126,6 +139,7 @@ function buildPrompt({ topic, tone, brand }) {
     "",
     "BRAND CONTEXT — fixed, never contradict it:",
     ...context.map((line) => `- ${line}`),
+    ...voiceDna,
     "",
     `IDEA: ${topic}`,
     `Default tone: ${toneText}`,
@@ -261,14 +275,24 @@ async function loadBrand(userId, brandId) {
   const wanted = String(brandId || "").trim();
   const { rows } = wanted
     ? await query(
-        "select id, name, audience, offer, tone from brand_vaults where id = $1 and user_id = $2",
+        "select id, name, audience, offer, tone, voice_dna from brand_vaults where id = $1 and user_id = $2",
         [wanted, userId],
       )
     : await query(
-        "select id, name, audience, offer, tone from brand_vaults where user_id = $1 order by updated_at desc limit 1",
+        "select id, name, audience, offer, tone, voice_dna from brand_vaults where user_id = $1 order by updated_at desc limit 1",
         [userId],
       );
-  return rows[0] || null;
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    audience: row.audience,
+    offer: row.offer,
+    tone: row.tone,
+    voiceDna: row.voice_dna || null,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -438,7 +462,14 @@ async function handler(req, res) {
       channels,
       detectedLanguage: channels.detectedLanguage || null,
       brand: brand
-        ? { id: brand.id, name: brand.name, audience: brand.audience, offer: brand.offer, tone: brand.tone }
+        ? {
+            id: brand.id,
+            name: brand.name,
+            audience: brand.audience,
+            offer: brand.offer,
+            tone: brand.tone,
+            voiceDna: brand.voiceDna,
+          }
         : null,
       unlimited,
       model,
