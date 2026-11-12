@@ -1,16 +1,15 @@
 /**
- * App.jsx — AI Social Post Studio
+ * App.jsx — OmniContext AI
  * ---------------------------------------------------------------------------
- * A complete, self-contained screen that:
- *   • sends the user's idea to your own backend (/api/generate), which calls a
- *     real LLM. The API key lives on the server, never in this file.
- *   • shows a sign-in / create-account modal. Once accounts are live, credits
- *     live on the server per email — signing in from another phone shows the
- *     same balance.
- *   • falls back to guest mode (credits in localStorage) until the backend has
- *     accounts configured, so the page always works.
- *   • opens a pricing modal whose buttons start a real Stripe Checkout session;
- *     credits are added by the Stripe webhook, not by this page.
+ * One screen that:
+ *   • keeps a Brand Vault per account (/api/brand) and writes with it
+ *   • turns one idea into LinkedIn, Instagram/Facebook and TikTok at once
+ *     (/api/generate), with the anti-cliché voice rules applied server-side
+ *   • shows accounts, plan status and unlimited usage from /api/auth/me
+ *   • opens a subscription pricing modal (Creator €19 / Agency €49) whose
+ *     buttons start a real monthly Stripe Checkout session
+ *   • still works in guest mode (credits in localStorage) when the backend has
+ *     no database configured
  *
  * Requires: React 18+.
  * ---------------------------------------------------------------------------
@@ -19,8 +18,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CSS } from "./styles.js";
+import { OMNI_CSS } from "./styles-omni.js";
 import AuthModal from "./AuthModal.jsx";
 import BrandHeader from "./BrandHeader.jsx";
+import BrandVaultPanel from "./BrandVaultPanel.jsx";
 import GeneratorForm from "./GeneratorForm.jsx";
 import PricingModal from "./PricingModal.jsx";
 import ResultsSection from "./ResultsSection.jsx";
@@ -29,18 +30,16 @@ import {
   CREDITS_KEY,
   FREE_CREDITS,
   MAX_RESULTS,
-  PLATFORM_MAP,
-  PLATFORMS,
   RESULTS_KEY,
   TONES,
-  cleanHashtags,
+  TONE_MAP,
   copyText,
   makeId,
   readStorage,
   writeStorage,
 } from "./studio-config.js";
 
-export { CREDIT_COST, FREE_CREDITS, PLANS, PLATFORMS, TONES } from "./studio-config.js";
+export { CREDIT_COST, FREE_CREDITS, PLANS, TONES } from "./studio-config.js";
 
 /* -------------------------------------------------------------------------- */
 /*  App                                                                      */
@@ -66,7 +65,6 @@ export default function App({ apiBase = "" }) {
   });
 
   const [topic, setTopic] = useState("");
-  const [platform, setPlatform] = useState(PLATFORMS[0].id);
   const [tone, setTone] = useState(TONES[0].id);
 
   const [loading, setLoading] = useState(false);
@@ -80,12 +78,21 @@ export default function App({ apiBase = "" }) {
 
   const [keyMissing, setKeyMissing] = useState(false);
 
+  /* Brand Vault */
+  const [vaults, setVaults] = useState([]);
+  const [brandId, setBrandId] = useState("");
+  const [vaultLimit, setVaultLimit] = useState(1);
+  const [vaultSaving, setVaultSaving] = useState(false);
+  const [vaultError, setVaultError] = useState(null);
+
   const copyTimer = useRef(null);
   const noticeTimer = useRef(null);
 
-  /* Cloud mode means the balance is the server's, not this browser's. */
+  /* Cloud mode means the balance and plan are the server's, not this browser's. */
   const cloud = accountsEnabled && sessionReady;
+  const unlimited = Boolean(user?.unlimited);
   const credits = cloud ? (user?.credits ?? 0) : guestCredits;
+  const selectedBrand = vaults.find((vault) => vault.id === brandId) || null;
 
   function flash(message) {
     setNotice(message);
@@ -120,6 +127,32 @@ export default function App({ apiBase = "" }) {
     }
   }, [base]);
 
+  /* The Brand Vault only exists for a signed-in account. */
+  const loadVaults = useCallback(async () => {
+    if (!cloud || !user) {
+      setVaults([]);
+      setBrandId("");
+      return;
+    }
+    try {
+      const response = await fetch(`${base}/api/brand`, {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) return;
+      const data = await response.json().catch(() => null);
+      if (!data) return;
+      const list = Array.isArray(data.vaults) ? data.vaults : [];
+      setVaults(list);
+      setVaultLimit(Number(data.limit) || 1);
+      setBrandId((current) =>
+        current && list.some((vault) => vault.id === current) ? current : list[0]?.id || ""
+      );
+    } catch {
+      /* the generator works without a vault too */
+    }
+  }, [base, cloud, user]);
+
   /* First load: who is signed in, and did we just come back from Stripe? */
   useEffect(() => {
     let alive = true;
@@ -132,7 +165,7 @@ export default function App({ apiBase = "" }) {
         const params = new URLSearchParams(window.location.search);
         const state = params.get("checkout");
         if (state === "success") {
-          setNotice("Payment received — your new credits will appear in a moment.");
+          setNotice("Payment received — your plan and credits are syncing.");
           if (noticeTimer.current) clearTimeout(noticeTimer.current);
           noticeTimer.current = setTimeout(() => setNotice(null), 9000);
           /* The webhook may land a second after the redirect; check twice. */
@@ -163,6 +196,10 @@ export default function App({ apiBase = "" }) {
       alive = false;
     };
   }, [refreshSession]);
+
+  useEffect(() => {
+    loadVaults();
+  }, [loadVaults]);
 
   /* Guests still get a remembered balance; signed-in users don't need one. */
   useEffect(() => {
@@ -207,10 +244,10 @@ export default function App({ apiBase = "" }) {
 
     const idea = topic.trim();
     if (!idea) {
-      setError("Write what the post should be about first.");
+      setError("Write the idea first — one or two sentences is plenty.");
       return;
     }
-    if (credits < CREDIT_COST) {
+    if (!unlimited && credits < CREDIT_COST) {
       setPricingOpen(true);
       return;
     }
@@ -232,7 +269,7 @@ export default function App({ apiBase = "" }) {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: idea, platform, tone, count: 3 }),
+        body: JSON.stringify({ topic: idea, tone, brandId: brandId || undefined }),
       });
       const data = await response.json().catch(() => ({}));
 
@@ -247,7 +284,7 @@ export default function App({ apiBase = "" }) {
       if (!response.ok) {
         throw new Error(data.error || `The server replied with ${response.status}.`);
       }
-      if (!Array.isArray(data.variants) || data.variants.length === 0) {
+      if (!data.channels) {
         throw new Error("The AI sent back an empty answer. Try again.");
       }
 
@@ -258,12 +295,22 @@ export default function App({ apiBase = "" }) {
       const entry = {
         id: makeId(),
         topic: idea,
-        platform,
         tone,
-        variants: data.variants.map((variant) => ({
-          text: String(variant?.text ?? "").trim(),
-          hashtags: cleanHashtags(variant?.hashtags),
-        })),
+        toneLabel: TONE_MAP[tone]?.label || "",
+        brandName: data.brand?.name || null,
+        channels: {
+          linkedin: { text: String(data.channels.linkedin?.text || "").trim() },
+          instagram: {
+            text: String(data.channels.instagram?.text || "").trim(),
+            hashtags: Array.isArray(data.channels.instagram?.hashtags)
+              ? data.channels.instagram.hashtags.map((tag) => String(tag))
+              : [],
+          },
+          tiktok: {
+            hook: String(data.channels.tiktok?.hook || "").trim(),
+            script: String(data.channels.tiktok?.script || "").trim(),
+          },
+        },
         createdAt: Date.now(),
       };
       setResults((previous) => [entry, ...previous].slice(0, MAX_RESULTS));
@@ -277,6 +324,50 @@ export default function App({ apiBase = "" }) {
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSaveBrand(draft) {
+    if (vaultSaving) return false;
+    setVaultSaving(true);
+    setVaultError(null);
+    try {
+      const response = await fetch(`${base}/api/brand`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Couldn't save that (${response.status}).`);
+
+      if (Array.isArray(data.vaults)) setVaults(data.vaults);
+      if (typeof data.limit === "number") setVaultLimit(data.limit);
+      if (data.vault?.id) setBrandId(data.vault.id);
+      flash(`Brand saved — "${data.vault?.name}" is now in every generation.`);
+      return true;
+    } catch (err) {
+      setVaultError(String(err?.message || err));
+      return false;
+    } finally {
+      setVaultSaving(false);
+    }
+  }
+
+  async function handleDeleteBrand(id) {
+    if (!id) return;
+    try {
+      const response = await fetch(`${base}/api/brand?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Couldn't remove that brand.");
+      if (Array.isArray(data.vaults)) setVaults(data.vaults);
+      setBrandId((current) => (current === id ? "" : current));
+      flash("Brand removed from your vault.");
+    } catch (err) {
+      setVaultError(String(err?.message || err));
     }
   }
 
@@ -313,9 +404,8 @@ export default function App({ apiBase = "" }) {
         return;
       }
       if (response.ok && data.demo) {
-        setGuestCredits((value) => value + data.credits);
         setPricingOpen(false);
-        flash(`Added ${data.credits} credits (demo mode — no payment was taken).`);
+        flash("Demo checkout — connect Stripe to take real payments.");
         return;
       }
       throw new Error(data.error || `Checkout failed (${response.status}).`);
@@ -330,8 +420,8 @@ export default function App({ apiBase = "" }) {
     try {
       await fetch(`${base}/api/auth/logout`, { method: "POST", credentials: "same-origin" });
     } catch {
-      /* The cookie is HttpOnly, so only the server can clear it — but even if
-         this request fails we still return to the signed-out screen, and the
+      /* The cookie is HttpOnly, so only the server can clear it — even if this
+         request fails, the page returns to the signed-out screen and the
          session expires on its own. */
     }
     setUser(null);
@@ -339,8 +429,10 @@ export default function App({ apiBase = "" }) {
     setError(null);
     setResults([]);
     setTopic("");
+    setVaults([]);
+    setBrandId("");
     setAuthOpen(true); // straight back to the sign-in screen
-    flash("You're logged out. Your credits stay on your account.");
+    flash("You're logged out. Your plan and Brand Vault are safe on your account.");
     refreshSession();
   }
 
@@ -353,7 +445,7 @@ export default function App({ apiBase = "" }) {
   async function handleCopy(text, id) {
     const ok = await copyText(text);
     if (!ok) {
-      setError("Your browser blocked clipboard access — select the caption and copy it by hand.");
+      setError("Your browser blocked clipboard access — select the text and copy it by hand.");
       return;
     }
     setCopiedId(id);
@@ -363,21 +455,23 @@ export default function App({ apiBase = "" }) {
 
   function clearHistory() {
     setResults([]);
-    flash("History cleared. Your credits are untouched.");
+    flash("History cleared. Your plan and credits are untouched.");
   }
 
-  const selectedPlatform = PLATFORM_MAP[platform] || PLATFORMS[0];
-  const creditWord = credits === 1 ? "credit" : "credits";
+  const creditWord = credits === 1 ? "generation" : "generations";
   const needsSignIn = cloud && !user;
 
   return (
     <div className="aisg">
       <style>{CSS}</style>
+      <style>{OMNI_CSS}</style>
 
       <div className="aisg-shell">
         <BrandHeader
           credits={credits}
           creditWord={creditWord}
+          unlimited={unlimited}
+          plan={user?.plan}
           user={user}
           accountsOn={cloud}
           onBuy={() => {
@@ -395,18 +489,31 @@ export default function App({ apiBase = "" }) {
           </div>
         )}
 
+        {cloud && user && (
+          <BrandVaultPanel
+            vaults={vaults}
+            limit={vaultLimit}
+            selectedId={brandId}
+            unlimited={unlimited}
+            saving={vaultSaving}
+            error={vaultError}
+            onSelect={setBrandId}
+            onSave={handleSaveBrand}
+            onDelete={handleDeleteBrand}
+          />
+        )}
+
         <GeneratorForm
           topic={topic}
           onTopic={setTopic}
-          platform={platform}
-          onPlatform={setPlatform}
           tone={tone}
           onTone={setTone}
           loading={loading}
+          unlimited={unlimited}
           credits={credits}
           creditWord={creditWord}
           needsSignIn={needsSignIn}
-          platformLabel={selectedPlatform.label}
+          brand={selectedBrand}
           onSubmit={handleGenerate}
         />
 
@@ -432,11 +539,11 @@ export default function App({ apiBase = "" }) {
 
       <PricingModal
         open={pricingOpen}
-        credits={credits}
         purchasing={purchasing}
         error={pricingError}
         cloud={cloud}
         signedIn={Boolean(user)}
+        plan={user?.plan}
         onClose={() => setPricingOpen(false)}
         onSelect={handlePurchase}
       />
