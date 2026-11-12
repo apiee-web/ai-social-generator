@@ -1,5 +1,6 @@
 /**
- * styles-omni.js — the extra rules for the Brand Vault and channel tabs.
+ * styles-omni.js — the extra rules for the Brand Vault, channel tabs and the
+ * verification banner.
  * ---------------------------------------------------------------------------
  * Kept apart from styles.js so the base sheet (and its phone breakpoints) stays
  * untouched. App.jsx injects both with <style> tags.
@@ -7,6 +8,35 @@
  */
 
 export const OMNI_CSS = `
+.aisg-verify {
+  margin-bottom: 18px; padding: 16px 18px;
+  border: 1px solid #f3d9a8; border-radius: 14px;
+  background: linear-gradient(180deg, #fffaf1, #fff6e6);
+}
+.aisg-verify-head { display: flex; gap: 12px; align-items: flex-start; }
+.aisg-verify-mark {
+  flex: none; width: 9px; height: 9px; margin-top: 7px; border-radius: 50%;
+  background: #e0930d; box-shadow: 0 0 0 4px rgba(224, 147, 13, 0.16);
+}
+.aisg-verify-head strong { font-size: 14px; color: #6b4405; }
+.aisg-verify-head p { font-size: 13px; line-height: 1.6; color: #8a6321; margin-top: 5px; }
+.aisg-verify-email { font-weight: 600; color: #6b4405; word-break: break-word; }
+.aisg-verify-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+.aisg-verify-code {
+  width: 128px; flex: none; text-align: center; letter-spacing: 0.22em;
+  font-size: 15px; font-weight: 700;
+}
+.aisg-verify-note { margin-top: 11px; font-size: 12.5px; color: #8a6321; }
+.aisg-verify-error { margin-top: 11px; margin-bottom: 0; }
+.aisg-verify-fallback { margin-top: 11px; font-size: 12.5px; color: #8a6321; }
+.aisg-verify-fallback a { color: #6b4405; font-weight: 600; }
+.aisg-chip-warn { background: #fdeccd; color: #8a5a06; }
+.aisg-submit-upgrade {
+  background: #fff; border: 1px solid var(--accent); color: var(--accent);
+  font-weight: 700;
+}
+.aisg-submit-upgrade:hover { background: rgba(91, 83, 240, 0.08); }
+
 .aisg-vault { margin-bottom: 18px; }
 .aisg-vault-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .aisg-vault-title { font-size: 15px; letter-spacing: -0.01em; }
@@ -85,5 +115,8 @@ export const OMNI_CSS = `
   .aisg-vault-head { flex-direction: column; gap: 8px; }
   .aisg-channel-preview { display: grid; grid-template-columns: 1fr; }
   .aisg-tab { font-size: 12px; padding: 7px 10px; }
+  .aisg-verify-form { display: grid; grid-template-columns: 1fr; }
+  .aisg-verify-code { width: 100%; }
+  .aisg-verify-form .aisg-btn { width: 100%; }
 }
 `;
