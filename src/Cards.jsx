@@ -33,7 +33,6 @@ function ResultCard({ result, copiedId, onCopy }) {
         <div className="aisg-result-meta">
           {result.brandName && <span className="aisg-chip aisg-chip-soft">{result.brandName}</span>}
           {result.toneLabel && <span className="aisg-chip">{result.toneLabel}</span>}
-          {result.language && <span className="aisg-chip">{result.language}</span>}
           <span className="aisg-time">{timeAgo(result.createdAt)}</span>
         </div>
         <p className="aisg-result-topic" title={result.topic}>
