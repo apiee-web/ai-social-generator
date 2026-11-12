@@ -6,8 +6,8 @@
  * ---------------------------------------------------------------------------
  */
 
-export const FREE_CREDITS = 3; // free generations a new account starts with
-export const CREDIT_COST = 1; // free credits charged per generation
+export const FREE_CREDITS = 5; // free test generations a new, verified account starts with
+export const CREDIT_COST = 1; // free credits charged per full 3-channel generation
 export const CREDITS_KEY = "aisg:credits:v1"; // localStorage key for the guest balance
 export const RESULTS_KEY = "omni:results:v1"; // localStorage key for past generations
 export const MAX_RESULTS = 8; // how many past generations to keep

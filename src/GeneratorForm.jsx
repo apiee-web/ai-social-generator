@@ -3,6 +3,10 @@
  * ---------------------------------------------------------------------------
  * There is no platform dropdown any more: one idea returns LinkedIn,
  * Instagram/Facebook and a TikTok script in the same call.
+ *
+ * The button knows about the two things that can stand in the way: an
+ * unconfirmed email, and a spent free balance. Both replace the button rather
+ * than failing a request the user already waited for.
  * ---------------------------------------------------------------------------
  */
 
@@ -16,11 +20,18 @@ export default function GeneratorForm({
   loading,
   unlimited,
   credits,
+  creditTotal,
   creditWord,
   needsSignIn,
+  verified,
+  outOfCredits,
   brand,
+  onUpgrade,
   onSubmit,
 }) {
+  const lockedByCredits = Boolean(outOfCredits) && !unlimited && !needsSignIn;
+  const lockedByEmail = verified === false && !needsSignIn;
+
   return (
     <form className="aisg-card aisg-form" onSubmit={onSubmit}>
       <label className="aisg-label" htmlFor="aisg-topic">
@@ -60,15 +71,29 @@ export default function GeneratorForm({
           </select>
         </div>
 
-        <button type="submit" className="aisg-btn aisg-btn-primary aisg-submit" disabled={loading}>
-          {loading ? (
-            <>
-              <span className="aisg-spinner" aria-hidden="true" /> Writing three channels…
-            </>
-          ) : (
-            <>Generate all 3 channels{unlimited ? "" : ` · ${CREDIT_COST} credit`}</>
-          )}
-        </button>
+        {lockedByEmail ? (
+          <button type="button" className="aisg-btn aisg-submit" disabled>
+            Verify your email to generate
+          </button>
+        ) : lockedByCredits ? (
+          <button type="button" className="aisg-btn aisg-submit aisg-submit-upgrade" onClick={onUpgrade}>
+            You've used your {creditTotal} free test credits · See plans
+          </button>
+        ) : (
+          <button
+            type="submit"
+            className="aisg-btn aisg-btn-primary aisg-submit"
+            disabled={loading || lockedByCredits || lockedByEmail}
+          >
+            {loading ? (
+              <>
+                <span className="aisg-spinner" aria-hidden="true" /> Writing three channels…
+              </>
+            ) : (
+              <>Generate all 3 channels{unlimited ? "" : ` · ${CREDIT_COST} credit`}</>
+            )}
+          </button>
+        )}
       </div>
 
       <div className="aisg-channel-preview" aria-hidden="true">
@@ -82,14 +107,16 @@ export default function GeneratorForm({
 
       <p className="aisg-hint">
         {needsSignIn
-          ? "Sign in to start — a new account comes with 3 free generations."
-          : brand
-            ? `Writing as ${brand.name} · ${brand.tone} tone · three channels per idea.`
-            : unlimited
-              ? "Unlimited generations on your plan · three channels per idea."
-              : credits > 0
-                ? `${credits} free ${creditWord} left · each generation returns all three channels.`
-                : "You're out of free generations — upgrade to keep going."}
+          ? `Sign in to start — a new account comes with ${creditTotal} free test credits.`
+          : lockedByEmail
+            ? "Check your inbox and confirm the address — the generator and your credits unlock together."
+            : brand
+              ? `Writing as ${brand.name} · ${brand.tone} tone · three channels per idea.`
+              : unlimited
+                ? "Unlimited generations on your plan · three channels per idea."
+                : credits > 0
+                  ? `${credits} of ${creditTotal} free test credits left · each generation returns all three channels.`
+                  : `You've used all ${creditTotal} free test credits — pick a plan to keep generating.`}
       </p>
     </form>
   );
