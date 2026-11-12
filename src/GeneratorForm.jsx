@@ -72,7 +72,7 @@ export default function GeneratorForm({
         </div>
 
         {lockedByEmail ? (
-          <button type="button" className="aisg-btn aisg-submit" disabled>
+          <button type="button" className="aisg-btn aisg-btn-outline aisg-submit" disabled>
             Verify your email to generate
           </button>
         ) : lockedByCredits ? (
