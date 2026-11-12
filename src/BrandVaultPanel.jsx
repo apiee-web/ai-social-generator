@@ -1,9 +1,10 @@
 /**
  * BrandVaultPanel.jsx — the saved brand context.
  * ---------------------------------------------------------------------------
- * One panel that holds the four facts the generator injects into every prompt:
- * who you are, who you talk to, what you offer and how you sound. Saving is
- * server-side, so the same profile is there on any device.
+ * The four facts the generator injects into every prompt — who you are, who
+ * you talk to, what you offer, how you sound — plus Voice DNA: two or three
+ * posts in your own words, analysed into a style fingerprint the generator
+ * imitates. Saving is server-side, so the same profile is there on any device.
  *
  * `vaults` and `limit` come from /api/brand, which is also what enforces the
  * plan limit — this component only explains it.
@@ -14,7 +15,17 @@ import { useEffect, useState } from "react";
 
 import { TONES } from "./studio-config.js";
 
-const EMPTY = { id: "", name: "", audience: "", offer: "", tone: TONES[0].id };
+const EMPTY = {
+  id: "",
+  name: "",
+  audience: "",
+  offer: "",
+  tone: TONES[0].id,
+  examplePosts: "",
+  voiceDna: null,
+};
+
+const MIN_EXAMPLES = 80;
 
 export default function BrandVaultPanel({
   vaults,
@@ -23,7 +34,9 @@ export default function BrandVaultPanel({
   onSelect,
   onSave,
   onDelete,
+  onAnalyze,
   saving,
+  analyzing,
   error,
   unlimited,
 }) {
@@ -44,7 +57,7 @@ export default function BrandVaultPanel({
 
   function startEdit() {
     if (!selected) return startNew();
-    setDraft({ ...selected });
+    setDraft({ ...EMPTY, ...selected });
     setOpen(true);
   }
 
@@ -60,6 +73,21 @@ export default function BrandVaultPanel({
       setDraft(EMPTY);
     }
   }
+
+  async function analyze() {
+    if (analyzing || saving) return;
+    const result = await onAnalyze(draft);
+    if (!result || typeof result !== "object") return;
+    setDraft((current) => ({
+      ...current,
+      id: result.id || current.id,
+      examplePosts: result.examplePosts ?? current.examplePosts,
+      voiceDna: result.voiceDna || current.voiceDna,
+    }));
+  }
+
+  const examplesLength = String(draft.examplePosts || "").trim().length;
+  const canAnalyze = examplesLength >= MIN_EXAMPLES && !analyzing && !saving;
 
   return (
     <section className="aisg-card aisg-vault">
@@ -77,6 +105,16 @@ export default function BrandVaultPanel({
         </span>
       </div>
 
+      {selected?.voiceDna && (
+        <div className="aisg-voice">
+          <span className="aisg-voice-badge">
+            <span className="aisg-voice-dot" aria-hidden="true" />
+            Voice DNA Active
+          </span>
+          <p className="aisg-voice-summary">{selected.voiceDna}</p>
+        </div>
+      )}
+
       {vaults.length > 0 && (
         <div className="aisg-vault-list" role="list">
           {vaults.map((vault) => (
@@ -89,6 +127,7 @@ export default function BrandVaultPanel({
               title={vault.audience}
             >
               {vault.name}
+              {vault.voiceDna ? <span className="aisg-vault-dna" title="Voice DNA saved">✦</span> : null}
             </button>
           ))}
           <button type="button" className="aisg-btn aisg-btn-small" onClick={startEdit}>
@@ -167,10 +206,42 @@ export default function BrandVaultPanel({
             </label>
           </div>
 
-          {error && <p className="aisg-error aisg-vault-error">{error}</p>}
+          <label className="aisg-fieldlabel aisg-voice-field">
+            Example Posts (Voice DNA)
+            <textarea
+              className="aisg-input aisg-voice-textarea"
+              rows={5}
+              maxLength={8000}
+              value={draft.examplePosts}
+              onChange={change("examplePosts")}
+              placeholder={
+                "Paste two or three posts you wrote, exactly as they went out — one per block, blank line between them."
+              }
+            />
+            <span className="aisg-voice-helper">
+              Paste 2–3 of your best LinkedIn or Instagram posts. Our AI will analyze your tone,
+              sentence rhythm, and vocabulary so every generated post sounds like you.
+            </span>
+          </label>
 
           <div className="aisg-vault-actions">
-            <button type="submit" className="aisg-btn aisg-btn-primary" disabled={saving}>
+            <button
+              type="button"
+              className="aisg-btn aisg-btn-outline"
+              onClick={analyze}
+              disabled={!canAnalyze}
+            >
+              {analyzing ? (
+                <>
+                  <span className="aisg-spinner" aria-hidden="true" /> Analyzing your style…
+                </>
+              ) : draft.voiceDna ? (
+                "Re-analyze writing style"
+              ) : (
+                "Analyze Writing Style"
+              )}
+            </button>
+            <button type="submit" className="aisg-btn aisg-btn-primary" disabled={saving || analyzing}>
               {saving ? "Saving…" : draft.id ? "Save changes" : "Save brand"}
             </button>
             {vaults.length > 0 && (
@@ -186,6 +257,18 @@ export default function BrandVaultPanel({
               </button>
             )}
           </div>
+
+          <p className="aisg-voice-note">
+            {examplesLength === 0
+              ? "Optional — without examples the generator uses your tone of voice only."
+              : examplesLength < MIN_EXAMPLES
+                ? `${MIN_EXAMPLES - examplesLength} more characters and the analysis can run.`
+                : draft.voiceDna
+                  ? "Voice DNA saved for this brand. Re-analyze after editing the examples."
+                  : "Ready — press Analyze Writing Style to build the fingerprint."}
+          </p>
+
+          {error && <p className="aisg-error aisg-vault-error">{error}</p>}
         </form>
       )}
     </section>
