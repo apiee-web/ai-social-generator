@@ -3,6 +3,10 @@
  * ---------------------------------------------------------------------------
  * Email + password, posted to /api/auth/signup or /api/auth/login. The server
  * sets an HttpOnly cookie, so nothing secret is ever stored in this file.
+ *
+ * A new account is signed in but unverified: the screen behind this modal
+ * shows the verification banner, and the signup response decides whether that
+ * banner can offer the link directly (no mail provider yet) or not.
  * Kept separate from App.jsx so the screen file stays readable.
  * ---------------------------------------------------------------------------
  */
@@ -73,7 +77,7 @@ export default function AuthModal({ open, base, onClose, onAuthed }) {
       }
 
       setPassword("");
-      onAuthed(data.user);
+      onAuthed(data.user, data.verification || null);
     } catch (err) {
       const message = String(err?.message || err);
       setError(
@@ -106,7 +110,7 @@ export default function AuthModal({ open, base, onClose, onAuthed }) {
         <h2 id="aisg-auth-title">{signingUp ? "Create your account" : "Sign in"}</h2>
         <p className="aisg-modal-sub">
           {signingUp
-            ? "Your credits are saved to this email, so they follow you to any device. New accounts get 3 free credits."
+            ? "Your credits are saved to this email, so they follow you to any device. New accounts get 5 free test credits, unlocked once you confirm your address."
             : "Enter the email and password you signed up with."}
         </p>
 

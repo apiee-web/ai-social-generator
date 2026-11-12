@@ -9,6 +9,7 @@
 
 export default function BrandHeader({
   credits,
+  creditTotal,
   creditWord,
   unlimited,
   plan,
@@ -19,6 +20,7 @@ export default function BrandHeader({
   onSignOut,
 }) {
   const planLabel = unlimited ? `${plan ? plan[0].toUpperCase() + plan.slice(1) : "Paid"} plan` : null;
+  const verified = user ? user.emailVerified !== false : false;
 
   return (
     <header className="aisg-head">
@@ -51,7 +53,9 @@ export default function BrandHeader({
           {unlimited ? (
             <span className="aisg-credits-label">{planLabel}</span>
           ) : (
-            <span className="aisg-credits-label">{creditWord}</span>
+            <span className="aisg-credits-label">
+              of {creditTotal} {creditWord}
+            </span>
           )}
         </div>
         <button type="button" className="aisg-btn aisg-btn-outline" onClick={onBuy}>
@@ -67,6 +71,11 @@ export default function BrandHeader({
                 <span className="aisg-who" title={user.email}>
                   {user.email}
                 </span>
+                {!verified && (
+                  <span className="aisg-chip aisg-chip-warn" title="Email not verified yet">
+                    Unverified
+                  </span>
+                )}
               </span>
               <button
                 type="button"
