@@ -1,20 +1,16 @@
 /**
  * api/stripe/return.js — GET /api/stripe/return?session_id=cs_…
  * ---------------------------------------------------------------------------
- * This is the Checkout success_url. The buyer used to land on the app first and
- * credits depended entirely on the webhook arriving in time; if the webhook
- * secret was wrong, people paid and never got their credits.
- *
- * So the server confirms the payment with Stripe itself, credits the account,
- * and only then hands the buyer back to the page. The balance is already
- * correct when they arrive, and the webhook (if it works) just adds nothing
- * because the credit is keyed on the Stripe session id.
+ * This is the Checkout success_url. The buyer lands here before the app, the
+ * server confirms the payment with Stripe itself and upgrades the account, and
+ * only then are they handed back to the page — so the plan (or credits) is
+ * already correct on arrival, and a broken webhook can't swallow a payment.
  *
  * Nothing here may block the buyer: every failure still redirects to the app.
  * ---------------------------------------------------------------------------
  */
 
-import { creditSession, isPaid } from "../_lib/credits.js";
+import { applyCheckoutSession, isPaid } from "../_lib/credits.js";
 import { resolveOrigin } from "../_lib/http.js";
 import { getStripe, hasStripe } from "../_lib/stripe.js";
 
@@ -30,17 +26,16 @@ export default async function handler(req, res) {
       const stripe = await getStripe();
       const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-      /* Bank debits settle later; the webhook credits those when they clear. */
       if (isPaid(session)) {
-        const result = await creditSession(session);
-        if (result.credited) {
-          console.log(`[stripe] return credited ${result.added} (balance ${result.balance})`);
-        }
+        const result = await applyCheckoutSession(session);
+        console.log(
+          `[stripe] return applied ${result.kind} to ${session.metadata?.userId || session.client_reference_id}`,
+        );
       }
     }
   } catch (err) {
     /* Unknown session, Stripe hiccup, missing key — the buyer still lands home
-       with the "payment received" notice, and the webhook can still credit. */
+       with the "payment received" notice, and the webhook can still apply it. */
     console.warn("[stripe] return check failed:", err?.message || err);
   }
 

@@ -1,29 +1,32 @@
 /**
  * api/stripe/webhook.js — POST /api/stripe/webhook
  * ---------------------------------------------------------------------------
- * Stripe calls this after a payment. Credits are added here or by
- * /api/stripe/return (whichever lands first) — never by the page itself, so
- * the page can't be faked to mint free credits.
- *
- * Safe to call twice: the purchase row is unique per Stripe session, and the
- * credit is added in the same statement that inserts it. Stripe retries failed
- * deliveries, so that matters.
+ * Stripe calls this when a subscription starts, renews or ends. The account is
+ * also upgraded by /api/stripe/return, so whichever arrives first wins and the
+ * other is a no-op (every write here is idempotent).
  *
  * Set this URL in Stripe → Developers → Webhooks:
  *   https://your-site.vercel.app/api/stripe/webhook
- * Events: checkout.session.completed, checkout.session.async_payment_succeeded
+ * Events: checkout.session.completed, checkout.session.async_payment_succeeded,
+ *         customer.subscription.updated, customer.subscription.deleted
  * The endpoint's "Signing secret" (whsec_…) must be exactly the value of
  * STRIPE_WEBHOOK_SECRET, or every delivery is rejected as unsigned.
  * ---------------------------------------------------------------------------
  */
 
-import { creditSession, isPaid } from "../_lib/credits.js";
+import { applyCheckoutSession, isPaid, syncSubscription } from "../_lib/credits.js";
 import { fail, noStore, readRawBody, send } from "../_lib/http.js";
 import { getStripe, stripeWebhookSecret } from "../_lib/stripe.js";
 
-const CREDITED_EVENTS = new Set([
+const CHECKOUT_EVENTS = new Set([
   "checkout.session.completed",
   "checkout.session.async_payment_succeeded",
+]);
+
+const SUBSCRIPTION_EVENTS = new Set([
+  "customer.subscription.created",
+  "customer.subscription.updated",
+  "customer.subscription.deleted",
 ]);
 
 export default async function handler(req, res) {
@@ -58,7 +61,21 @@ export default async function handler(req, res) {
       return send(res, 400, { error: "Invalid Stripe signature." });
     }
 
-    if (!CREDITED_EVENTS.has(event.type)) {
+    /* ---- Subscription lifecycle (renewals, cancellations, failures) ------ */
+    if (SUBSCRIPTION_EVENTS.has(event.type)) {
+      const subscription = event.data?.object || {};
+      const result = await syncSubscription({
+        subscriptionId: String(subscription.id || ""),
+        customerId: String(subscription.customer || ""),
+        planId: String(subscription.metadata?.planId || ""),
+        status: String(subscription.status || ""),
+        periodEnd: subscription.current_period_end,
+      });
+      console.log(`[stripe] ${event.type} → plan=${result.plan} status=${result.status}`);
+      return send(res, 200, { received: true, ...result });
+    }
+
+    if (!CHECKOUT_EVENTS.has(event.type)) {
       return send(res, 200, { received: true, ignored: event.type });
     }
 
@@ -69,22 +86,18 @@ export default async function handler(req, res) {
       return send(res, 200, { received: true, pending: true });
     }
 
-    const result = await creditSession(session);
+    const result = await applyCheckoutSession(session);
 
-    if (!result.credited) {
-      /* Already processed by this route or by /api/stripe/return, or the
-         account no longer exists. */
-      return send(res, 200, {
-        received: true,
-        credited: false,
-        duplicate: result.reason === "duplicate",
-      });
+    if (result.kind === "subscription") {
+      console.log(`[stripe] subscription ${result.planId} active for ${session.client_reference_id}`);
+      return send(res, 200, { received: true, plan: result.planId, activated: result.activated });
     }
 
-    console.log(
-      `[stripe] webhook credited ${result.added} to ${session.metadata?.userId || session.client_reference_id} (balance ${result.balance})`,
-    );
-    return send(res, 200, { received: true, credited: true, balance: result.balance });
+    return send(res, 200, {
+      received: true,
+      credited: Boolean(result.credited),
+      balance: result.balance ?? null,
+    });
   } catch (err) {
     return fail(res, err);
   }

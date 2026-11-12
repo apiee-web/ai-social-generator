@@ -1,12 +1,11 @@
 /**
  * api/checkout.js — POST /api/checkout
  * ---------------------------------------------------------------------------
- * Body: { planId: "starter" | "pro" | "agency" }.
+ * Body: { planId: "creator" | "agency" }.
  *
- * With accounts and STRIPE_SECRET_KEY in place this creates a real Stripe
- * Checkout session and returns { url } — the browser follows it. Credits land
- * on the account only when Stripe confirms the payment (/api/stripe/return and
- * /api/stripe/webhook), never because the page says a payment happened.
+ * Creates a real monthly Stripe Checkout subscription and returns { url } —
+ * the browser follows it. The account switches to unlimited only when Stripe
+ * confirms the payment, at /api/stripe/return or /api/stripe/webhook.
  *
  * With no database it falls back to the old demo behaviour, so the page still
  * works before accounts are switched on.
@@ -32,14 +31,14 @@ export default async function handler(req, res) {
     if (!hasDatabase()) {
       return send(res, 200, {
         demo: true,
-        credits: plan.credits,
+        planId: plan.id,
         message: "Demo checkout — no payment was taken.",
       });
     }
 
     if (!hasStripe()) {
       return send(res, 503, {
-        error: "Card payments aren't switched on yet. Add STRIPE_SECRET_KEY in your hosting settings.",
+        error: "Subscriptions aren't switched on yet. Add STRIPE_SECRET_KEY in your hosting settings.",
         code: "stripe_off",
       });
     }
@@ -47,8 +46,15 @@ export default async function handler(req, res) {
     const user = await currentUser(req);
     if (!user) {
       return send(res, 401, {
-        error: "Sign in before buying credits.",
+        error: "Sign in before subscribing.",
         code: "auth_required",
+      });
+    }
+
+    if (user.subscribed && user.plan === plan.id) {
+      return send(res, 409, {
+        error: `You're already on the ${plan.name} plan.`,
+        code: "already_on_plan",
       });
     }
 
@@ -61,7 +67,7 @@ export default async function handler(req, res) {
 
     const stripe = await getStripe();
     const session = await stripe.checkout.sessions.create({
-      mode: "payment",
+      mode: "subscription",
       customer_email: user.email,
       client_reference_id: user.id,
       allow_promotion_codes: true,
@@ -69,20 +75,18 @@ export default async function handler(req, res) {
         {
           quantity: 1,
           price_data: {
-            currency: "usd",
+            currency: plan.currency,
             unit_amount: plan.cents,
+            recurring: { interval: plan.interval },
             product_data: { name: planSummary(plan) },
           },
         },
       ],
-      metadata: {
-        userId: user.id,
-        planId: plan.id,
-        credits: String(plan.credits),
-      },
+      metadata: { userId: user.id, planId: plan.id, kind: "subscription" },
+      subscription_data: { metadata: { userId: user.id, planId: plan.id } },
       /* Back through our own server first: it confirms the payment with Stripe
-         and credits the account before the buyer sees the page, so the balance
-         is right even if the webhook is delayed or misconfigured. */
+         and upgrades the account before the buyer sees the page, so the plan is
+         right even if the webhook is delayed or misconfigured. */
       success_url: `${origin}/api/stripe/return?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/?checkout=cancelled`,
     });
@@ -91,7 +95,7 @@ export default async function handler(req, res) {
       return send(res, 502, { error: "Stripe didn't return a checkout link. Try again." });
     }
 
-    return send(res, 200, { url: session.url, planId: plan.id, credits: plan.credits });
+    return send(res, 200, { url: session.url, planId: plan.id, mode: "subscription" });
   } catch (err) {
     if (err?.type === "StripeAuthenticationError") {
       return send(res, 503, {
