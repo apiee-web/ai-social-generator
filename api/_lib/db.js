@@ -5,10 +5,11 @@
  *
  * Set DATABASE_URL (Neon, Supabase, Railway, plain Postgres — anything that
  * speaks SQL) and accounts switch on. Leave it unset and the app keeps working
- * in guest mode, exactly as it did before accounts existed.
+ * in guest mode.
  *
  * The schema is created on first use, so there is no migration step to run by
- * hand: the first signup or sign-in after a deploy does it.
+ * hand: the first signup or sign-in after a deploy does it. New columns are
+ * added with `add column if not exists`, which is safe on an existing table.
  * ---------------------------------------------------------------------------
  */
 
@@ -95,6 +96,11 @@ const SCHEMA = [
      created_at timestamptz not null default now(),
      last_login_at timestamptz
    )`,
+  /* Subscription state, added in place so existing accounts keep working. */
+  `alter table app_users add column if not exists subscription_status text`,
+  `alter table app_users add column if not exists stripe_customer_id text`,
+  `alter table app_users add column if not exists stripe_subscription_id text`,
+  `alter table app_users add column if not exists current_period_end timestamptz`,
   `create table if not exists credit_purchases (
      id text primary key,
      user_id text not null references app_users(id) on delete cascade,
@@ -105,6 +111,18 @@ const SCHEMA = [
      created_at timestamptz not null default now()
    )`,
   `create index if not exists credit_purchases_user_idx on credit_purchases (user_id)`,
+  /* The Brand Vault: the context a user should never have to retype. */
+  `create table if not exists brand_vaults (
+     id text primary key,
+     user_id text not null references app_users(id) on delete cascade,
+     name text not null,
+     audience text not null,
+     offer text not null,
+     tone text not null,
+     created_at timestamptz not null default now(),
+     updated_at timestamptz not null default now()
+   )`,
+  `create index if not exists brand_vaults_user_idx on brand_vaults (user_id)`,
 ];
 
 export async function ensureSchema() {
