@@ -20,7 +20,7 @@ export default function ResultsSection({ results, loading, copiedId, onCopy, onC
       {loading && <LoadingCard />}
 
       {results.map((result) => (
-        <ResultCard key={result.id} result={result} credits={null} copiedId={copiedId} onCopy={onCopy} />
+        <ResultCard key={result.id} result={result} copiedId={copiedId} onCopy={onCopy} />
       ))}
 
       {!loading && results.length === 0 && (

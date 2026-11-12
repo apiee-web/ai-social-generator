@@ -1,22 +1,16 @@
 /**
- * PricingModal.jsx — the credit packs and their checkout buttons.
+ * PricingModal.jsx — the two monthly subscription plans.
+ * ---------------------------------------------------------------------------
+ * Creator €19/month and Agency €49/month. Both are unlimited; they differ in
+ * how many Brand Vault profiles the account keeps.
  * ---------------------------------------------------------------------------
  */
 
 import { useEffect } from "react";
 
-import { CREDIT_COST, PLANS } from "./studio-config.js";
+import { PLANS } from "./studio-config.js";
 
-export default function PricingModal({
-  open,
-  credits,
-  purchasing,
-  error,
-  cloud,
-  signedIn,
-  onClose,
-  onSelect,
-}) {
+export default function PricingModal({ open, purchasing, error, cloud, signedIn, plan, onClose, onSelect }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event) => {
@@ -50,43 +44,48 @@ export default function PricingModal({
           ×
         </button>
 
-        <h2 id="aisg-pricing-title">Buy credits</h2>
+        <h2 id="aisg-pricing-title">Upgrade your content engine</h2>
         <p className="aisg-modal-sub">
-          You have {credits} {credits === 1 ? "credit" : "credits"}. Each generation costs{" "}
-          {CREDIT_COST} credit and returns 3 full captions.
+          Every plan writes LinkedIn, Instagram/Facebook and TikTok from one idea, in your brand's
+          saved voice — with the anti-cliché guard on.
         </p>
 
-        <div className="aisg-plans">
-          {PLANS.map((plan) => (
-            <div
-              key={plan.id}
-              className={plan.popular ? "aisg-plan aisg-plan-popular" : "aisg-plan"}
-            >
-              {plan.popular && <span className="aisg-badge">Most popular</span>}
-              <h3>{plan.name}</h3>
-              <p className="aisg-price">
-                <span>${plan.price}</span> one-time
-              </p>
-              <p className="aisg-plan-tagline">{plan.tagline}</p>
-              <ul className="aisg-perks">
-                {plan.perks.map((perk) => (
-                  <li key={perk}>{perk}</li>
-                ))}
-              </ul>
-              <button
-                type="button"
-                className="aisg-btn aisg-btn-primary aisg-btn-full"
-                onClick={() => onSelect(plan)}
-                disabled={Boolean(purchasing)}
+        <div className="aisg-plans aisg-plans-two">
+          {PLANS.map((option) => {
+            const current = signedIn && plan === option.id;
+            return (
+              <div
+                key={option.id}
+                className={option.popular ? "aisg-plan aisg-plan-popular" : "aisg-plan"}
               >
-                {purchasing === plan.id
-                  ? "Opening checkout…"
-                  : cloud && !signedIn
-                    ? "Sign in to buy"
-                    : `Get ${plan.credits} credits`}
-              </button>
-            </div>
-          ))}
+                {option.popular && <span className="aisg-badge">Most popular</span>}
+                <h3>{option.name}</h3>
+                <p className="aisg-price">
+                  <span>€{option.price}</span>/ {option.interval}
+                </p>
+                <p className="aisg-plan-tagline">{option.tagline}</p>
+                <ul className="aisg-perks">
+                  {option.perks.map((perk) => (
+                    <li key={perk}>{perk}</li>
+                  ))}
+                </ul>
+                <button
+                  type="button"
+                  className="aisg-btn aisg-btn-primary aisg-btn-full"
+                  onClick={() => onSelect(option)}
+                  disabled={Boolean(purchasing) || current}
+                >
+                  {current
+                    ? "Your current plan"
+                    : purchasing === option.id
+                      ? "Opening checkout…"
+                      : cloud && !signedIn
+                        ? "Sign in to subscribe"
+                        : `Subscribe · €${option.price}/month`}
+                </button>
+              </div>
+            );
+          })}
         </div>
 
         {error && (
@@ -97,9 +96,9 @@ export default function PricingModal({
 
         <p className="aisg-fineprint">
           {cloud && signedIn
-            ? "Secure payment by Stripe. You'll be returned here automatically and the credits are added to your account the moment payment clears."
+            ? "Secure recurring payment by Stripe. Cancel any time from the Stripe receipt — access lasts to the end of the paid month."
             : cloud
-              ? "Sign in first — credits are tied to your email so they follow you to any device."
+              ? "Sign in first — your plan and Brand Vault follow your email to any device."
               : "Demo mode: no card is charged until accounts and Stripe are connected."}
         </p>
       </div>

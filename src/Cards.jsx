@@ -1,20 +1,36 @@
 /**
- * Cards.jsx — one generated result, and the loading placeholder.
+ * Cards.jsx — one generated result as channel tabs, plus the loading placeholder.
+ * ---------------------------------------------------------------------------
+ * A single generation now holds three channels, so each card shows tabs and a
+ * copy button for whichever channel is open.
  * ---------------------------------------------------------------------------
  */
 
-import { PLATFORM_MAP, PLATFORMS, TONE_MAP, composeText, timeAgo } from "./studio-config.js";
+import { useState } from "react";
+
+import {
+  CHANNELS,
+  CHANNEL_MAP,
+  channelHasContent,
+  composeChannel,
+  timeAgo,
+} from "./studio-config.js";
 
 function ResultCard({ result, copiedId, onCopy }) {
-  const platform = PLATFORM_MAP[result.platform] || PLATFORMS[0];
-  const tone = TONE_MAP[result.tone];
+  const available = CHANNELS.filter((channel) => channelHasContent(channel.id, result.channels));
+  const [activeId, setActiveId] = useState(available[0]?.id || CHANNELS[0].id);
+  const active = CHANNEL_MAP[activeId] || CHANNELS[0];
+  const channel = result.channels?.[activeId] || {};
+  const text = composeChannel(activeId, result.channels);
+  const copyKey = `${result.id}-${activeId}`;
+  const over = text.length > active.limit;
 
   return (
     <article className="aisg-card aisg-result">
       <div className="aisg-result-head">
         <div className="aisg-result-meta">
-          <span className="aisg-chip">{platform.label}</span>
-          {tone && <span className="aisg-chip aisg-chip-soft">{tone.label}</span>}
+          {result.brandName && <span className="aisg-chip aisg-chip-soft">{result.brandName}</span>}
+          {result.toneLabel && <span className="aisg-chip">{result.toneLabel}</span>}
           <span className="aisg-time">{timeAgo(result.createdAt)}</span>
         </div>
         <p className="aisg-result-topic" title={result.topic}>
@@ -22,31 +38,55 @@ function ResultCard({ result, copiedId, onCopy }) {
         </p>
       </div>
 
-      <div className="aisg-variants">
-        {result.variants.map((variant, index) => {
-          const text = composeText(variant);
-          const id = `${result.id}-${index}`;
-          const over = text.length > platform.limit;
+      <div className="aisg-tabs" role="tablist" aria-label="Channels">
+        {available.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            role="tab"
+            aria-selected={option.id === activeId}
+            className={option.id === activeId ? "aisg-tab is-active" : "aisg-tab"}
+            onClick={() => setActiveId(option.id)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
 
-          return (
-            <div className="aisg-variant" key={id}>
-              <p className="aisg-variant-text">{text}</p>
-              <div className="aisg-variant-foot">
-                <span className={over ? "aisg-count aisg-count-over" : "aisg-count"}>
-                  {text.length.toLocaleString()} / {platform.limit.toLocaleString()}
-                  {over ? " · too long" : ""}
-                </span>
-                <button
-                  type="button"
-                  className="aisg-btn aisg-btn-small"
-                  onClick={() => onCopy(text, id)}
-                >
-                  {copiedId === id ? "Copied ✓" : "Copy"}
-                </button>
+      <div className="aisg-channel-body" role="tabpanel">
+        {activeId === "tiktok" ? (
+          <>
+            {channel.hook && (
+              <div className="aisg-tiktok-hook">
+                <span className="aisg-tiktok-label">First 3 seconds</span>
+                <p>{channel.hook}</p>
               </div>
-            </div>
-          );
-        })}
+            )}
+            <p className="aisg-variant-text">{channel.script}</p>
+          </>
+        ) : (
+          <p className="aisg-variant-text">{channel.text}</p>
+        )}
+
+        {activeId === "instagram" &&
+          Array.isArray(channel.hashtags) &&
+          channel.hashtags.length > 0 && (
+            <p className="aisg-hashtags">{channel.hashtags.join(" ")}</p>
+          )}
+      </div>
+
+      <div className="aisg-variant-foot">
+        <span className={over ? "aisg-count aisg-count-over" : "aisg-count"}>
+          {text.length.toLocaleString()} / {active.limit.toLocaleString()}
+          {over ? " · trim before posting" : ""}
+        </span>
+        <button
+          type="button"
+          className="aisg-btn aisg-btn-small"
+          onClick={() => onCopy(text, copyKey)}
+        >
+          {copiedId === copyKey ? "Copied ✓" : `Copy ${active.label}`}
+        </button>
       </div>
     </article>
   );
