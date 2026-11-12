@@ -29,7 +29,7 @@ export default async function handler(req, res) {
 
     await ensureSchema();
     const { rows } = await query(
-      "select id, email, credits, plan, password_hash from app_users where email = $1",
+      "select id, email, credits, plan, password_hash, subscription_status, email_verified from app_users where email = $1",
       [email],
     );
     const row = rows[0];
