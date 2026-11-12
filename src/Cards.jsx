@@ -2,7 +2,9 @@
  * Cards.jsx — one generated result as channel tabs, plus the loading placeholder.
  * ---------------------------------------------------------------------------
  * A single generation now holds three channels, so each card shows tabs and a
- * copy button for whichever channel is open.
+ * copy button for whichever channel is open. The body keeps its paragraph
+ * breaks: `whitespace-pre-line` lets the model's double line breaks render, and
+ * the copy button hands over the same text with those breaks intact.
  * ---------------------------------------------------------------------------
  */
 
@@ -31,6 +33,7 @@ function ResultCard({ result, copiedId, onCopy }) {
         <div className="aisg-result-meta">
           {result.brandName && <span className="aisg-chip aisg-chip-soft">{result.brandName}</span>}
           {result.toneLabel && <span className="aisg-chip">{result.toneLabel}</span>}
+          {result.language && <span className="aisg-chip">{result.language}</span>}
           <span className="aisg-time">{timeAgo(result.createdAt)}</span>
         </div>
         <p className="aisg-result-topic" title={result.topic}>
@@ -62,10 +65,10 @@ function ResultCard({ result, copiedId, onCopy }) {
                 <p>{channel.hook}</p>
               </div>
             )}
-            <p className="aisg-variant-text">{channel.script}</p>
+            <p className="aisg-variant-text whitespace-pre-line">{channel.script}</p>
           </>
         ) : (
-          <p className="aisg-variant-text">{channel.text}</p>
+          <p className="aisg-variant-text whitespace-pre-line">{channel.text}</p>
         )}
 
         {activeId === "instagram" &&
