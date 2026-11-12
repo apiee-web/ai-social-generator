@@ -1,24 +1,16 @@
 /**
  * studio-config.js — shared constants and small helpers
  * ---------------------------------------------------------------------------
- * Prices, platform limits, the plan copy and the storage/clipboard helpers.
- * Everything that both the screen and its sub-components need lives here.
+ * Plans, channels, tone list and the storage/clipboard helpers. Everything the
+ * screen and its sub-components need lives here.
  * ---------------------------------------------------------------------------
  */
 
-export const FREE_CREDITS = 3; // credits a brand-new visitor starts with
-export const CREDIT_COST = 1; // credits charged per generation
+export const FREE_CREDITS = 3; // free generations a new account starts with
+export const CREDIT_COST = 1; // free credits charged per generation
 export const CREDITS_KEY = "aisg:credits:v1"; // localStorage key for the guest balance
-export const RESULTS_KEY = "aisg:results:v1"; // localStorage key for past captions
-export const MAX_RESULTS = 8; // how many past generations to keep in the list
-
-export const PLATFORMS = [
-  { id: "instagram", label: "Instagram", limit: 2200 },
-  { id: "x", label: "X / Twitter", limit: 280 },
-  { id: "linkedin", label: "LinkedIn", limit: 3000 },
-  { id: "tiktok", label: "TikTok", limit: 2200 },
-  { id: "facebook", label: "Facebook", limit: 63206 },
-];
+export const RESULTS_KEY = "omni:results:v1"; // localStorage key for past generations
+export const MAX_RESULTS = 8; // how many past generations to keep
 
 export const TONES = [
   { id: "friendly", label: "Friendly" },
@@ -28,37 +20,48 @@ export const TONES = [
   { id: "inspirational", label: "Inspirational" },
 ];
 
-/* Display copy only — the real prices are in api/_lib/plans.js. */
+/* The three channels every generation returns, in tab order. */
+export const CHANNELS = [
+  { id: "linkedin", label: "LinkedIn", blurb: "Hook · story · call to action", limit: 3000 },
+  { id: "instagram", label: "Instagram / Facebook", blurb: "Caption + hashtags", limit: 2200 },
+  { id: "tiktok", label: "TikTok / Reels", blurb: "3-second hook + spoken script", limit: 2200 },
+];
+
+/* Display copy and limits only — the real prices live in api/_lib/plans.js. */
 export const PLANS = [
   {
-    id: "starter",
-    name: "Starter",
-    price: 9,
-    credits: 50,
-    tagline: "Try it out",
-    perks: ["50 generations", "All 5 platforms", "Every tone", "Copy-ready captions"],
-  },
-  {
-    id: "pro",
-    name: "Pro",
+    id: "creator",
+    name: "Creator",
     price: 19,
-    credits: 250,
-    tagline: "For creators",
+    interval: "month",
+    vaults: 1,
+    tagline: "One brand, every channel",
     popular: true,
-    perks: ["250 generations", "Everything in Starter", "3 options per post", "Saved history"],
+    perks: [
+      "Unlimited generations",
+      "LinkedIn, Instagram and TikTok in one click",
+      "1 Brand Vault profile",
+      "Anti-cliché voice guard",
+    ],
   },
   {
     id: "agency",
     name: "Agency",
     price: 49,
-    credits: 1000,
-    tagline: "For teams",
-    perks: ["1,000 generations", "Everything in Pro", "Best price per post", "Priority support"],
+    interval: "month",
+    vaults: 5,
+    tagline: "Several brands or clients",
+    perks: [
+      "Unlimited generations",
+      "Everything in Creator",
+      "Up to 5 Brand Vault profiles",
+      "Switch brands per generation",
+    ],
   },
 ];
 
-export const PLATFORM_MAP = Object.fromEntries(PLATFORMS.map((p) => [p.id, p]));
-export const TONE_MAP = Object.fromEntries(TONES.map((t) => [t.id, t]));
+export const CHANNEL_MAP = Object.fromEntries(CHANNELS.map((channel) => [channel.id, channel]));
+export const TONE_MAP = Object.fromEntries(TONES.map((tone) => [tone.id, tone]));
 
 export function readStorage(key, fallback) {
   try {
@@ -101,11 +104,30 @@ export function cleanHashtags(hashtags) {
     .map((tag) => (tag.startsWith("#") ? tag : `#${tag.replace(/^#+/g, "")}`));
 }
 
-/** Caption body + hashtags, exactly as it should be pasted into the app. */
-export function composeText(variant) {
-  const body = String(variant?.text ?? "").trim();
-  const tags = cleanHashtags(variant?.hashtags);
-  return tags.length > 0 ? `${body}\n\n${tags.join(" ")}` : body;
+/** Does this generation actually contain anything for the channel? */
+export function channelHasContent(channelId, channels) {
+  const channel = channels?.[channelId] || {};
+  if (channelId === "tiktok") return Boolean(String(channel.hook || channel.script || "").trim());
+  return Boolean(String(channel.text || "").trim());
+}
+
+/** Exactly what should land on the clipboard for one channel. */
+export function composeChannel(channelId, channels) {
+  const channel = channels?.[channelId] || {};
+
+  if (channelId === "linkedin") return String(channel.text || "").trim();
+
+  if (channelId === "instagram") {
+    const tags = cleanHashtags(channel.hashtags);
+    const body = String(channel.text || "").trim();
+    return tags.length > 0 ? `${body}\n\n${tags.join(" ")}` : body;
+  }
+
+  const hook = String(channel.hook || "").trim();
+  const script = String(channel.script || "").trim();
+  return [hook && `HOOK (first 3 seconds): ${hook}`, script && `SCRIPT:\n${script}`]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export async function copyText(text) {

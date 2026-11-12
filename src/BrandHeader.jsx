@@ -1,20 +1,25 @@
 /**
- * BrandHeader.jsx — the logo, the credit counter and the account controls.
+ * BrandHeader.jsx — the logo, the plan/credit counter and the account controls.
  * ---------------------------------------------------------------------------
  * Purely presentational: everything it needs arrives as props, so the screen
- * file stays about state instead of markup.
+ * file stays about state instead of markup. The markup keeps the `.aisg-wallet`
+ * and `.aisg-user` hooks that the phone breakpoints in styles.js rely on.
  * ---------------------------------------------------------------------------
  */
 
 export default function BrandHeader({
   credits,
   creditWord,
+  unlimited,
+  plan,
   user,
   accountsOn,
   onBuy,
   onSignIn,
   onSignOut,
 }) {
+  const planLabel = unlimited ? `${plan ? plan[0].toUpperCase() + plan.slice(1) : "Paid"} plan` : null;
+
   return (
     <header className="aisg-head">
       <div className="aisg-brand">
@@ -34,19 +39,23 @@ export default function BrandHeader({
           </svg>
         </span>
         <div>
-          <h1>Social Post Studio</h1>
-          <p>Real AI captions for every platform</p>
+          <h1>OmniContext AI</h1>
+          <p>Multi-channel content in your brand's voice</p>
         </div>
       </div>
 
       <div className="aisg-wallet">
         <div className="aisg-credits" aria-live="polite">
-          <span aria-hidden="true">⚡</span>
-          <strong>{credits}</strong>
-          <span className="aisg-credits-label">{creditWord}</span>
+          <span aria-hidden="true">{unlimited ? "∞" : "⚡"}</span>
+          <strong>{unlimited ? "Unlimited" : credits}</strong>
+          {unlimited ? (
+            <span className="aisg-credits-label">{planLabel}</span>
+          ) : (
+            <span className="aisg-credits-label">{creditWord}</span>
+          )}
         </div>
         <button type="button" className="aisg-btn aisg-btn-outline" onClick={onBuy}>
-          Buy credits
+          {unlimited ? "Plans" : "Upgrade"}
         </button>
         {accountsOn &&
           (user ? (

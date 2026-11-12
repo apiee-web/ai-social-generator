@@ -1,5 +1,5 @@
 /**
- * ResultsSection.jsx — the list of past captions, plus its empty state.
+ * ResultsSection.jsx — the list of past generations, plus its empty state.
  * ---------------------------------------------------------------------------
  */
 
@@ -9,7 +9,7 @@ export default function ResultsSection({ results, loading, copiedId, onCopy, onC
   return (
     <section className="aisg-results" aria-busy={loading}>
       <div className="aisg-results-head">
-        <h2>Your captions</h2>
+        <h2>Your content</h2>
         {results.length > 0 && (
           <button type="button" className="aisg-link" onClick={onClear}>
             Clear history
@@ -20,15 +20,15 @@ export default function ResultsSection({ results, loading, copiedId, onCopy, onC
       {loading && <LoadingCard />}
 
       {results.map((result) => (
-        <ResultCard key={result.id} result={result} copiedId={copiedId} onCopy={onCopy} />
+        <ResultCard key={result.id} result={result} credits={null} copiedId={copiedId} onCopy={onCopy} />
       ))}
 
       {!loading && results.length === 0 && (
         <div className="aisg-empty">
-          <p className="aisg-empty-title">No captions yet</p>
+          <p className="aisg-empty-title">Nothing written yet</p>
           <p>
-            Type an idea above, pick a platform and a tone, then hit Generate. You get
-            three different angles to choose from.
+            Describe the idea once, then hit Generate. You get LinkedIn, Instagram/Facebook and a
+            TikTok script back together — each in your saved brand voice.
           </p>
         </div>
       )}

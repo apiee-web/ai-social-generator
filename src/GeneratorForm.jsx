@@ -1,28 +1,30 @@
 /**
- * GeneratorForm.jsx — the idea box, the platform/tone pickers and the button.
+ * GeneratorForm.jsx — the idea box, the tone picker and the generate button.
+ * ---------------------------------------------------------------------------
+ * There is no platform dropdown any more: one idea returns LinkedIn,
+ * Instagram/Facebook and a TikTok script in the same call.
  * ---------------------------------------------------------------------------
  */
 
-import { CREDIT_COST, PLATFORMS, TONES } from "./studio-config.js";
+import { CHANNELS, CREDIT_COST, TONES } from "./studio-config.js";
 
 export default function GeneratorForm({
   topic,
   onTopic,
-  platform,
-  onPlatform,
   tone,
   onTone,
   loading,
+  unlimited,
   credits,
   creditWord,
   needsSignIn,
-  platformLabel,
+  brand,
   onSubmit,
 }) {
   return (
     <form className="aisg-card aisg-form" onSubmit={onSubmit}>
       <label className="aisg-label" htmlFor="aisg-topic">
-        What's the post about?
+        What's the content about?
       </label>
       <textarea
         id="aisg-topic"
@@ -40,24 +42,6 @@ export default function GeneratorForm({
       />
 
       <div className="aisg-controls">
-        <div className="aisg-field">
-          <label className="aisg-label aisg-label-small" htmlFor="aisg-platform">
-            Platform
-          </label>
-          <select
-            id="aisg-platform"
-            className="aisg-input"
-            value={platform}
-            onChange={(event) => onPlatform(event.target.value)}
-          >
-            {PLATFORMS.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
         <div className="aisg-field">
           <label className="aisg-label aisg-label-small" htmlFor="aisg-tone">
             Tone
@@ -79,20 +63,33 @@ export default function GeneratorForm({
         <button type="submit" className="aisg-btn aisg-btn-primary aisg-submit" disabled={loading}>
           {loading ? (
             <>
-              <span className="aisg-spinner" aria-hidden="true" /> Writing…
+              <span className="aisg-spinner" aria-hidden="true" /> Writing three channels…
             </>
           ) : (
-            <>Generate · {CREDIT_COST} credit</>
+            <>Generate all 3 channels{unlimited ? "" : ` · ${CREDIT_COST} credit`}</>
           )}
         </button>
       </div>
 
+      <div className="aisg-channel-preview" aria-hidden="true">
+        {CHANNELS.map((channel) => (
+          <span key={channel.id} className="aisg-channel-pill">
+            <strong>{channel.label}</strong>
+            <span>{channel.blurb}</span>
+          </span>
+        ))}
+      </div>
+
       <p className="aisg-hint">
         {needsSignIn
-          ? "Sign in to start — a new account comes with 3 free credits."
-          : credits > 0
-            ? `${credits} ${creditWord} left · each generation returns 3 options for ${platformLabel}`
-            : "You're out of credits — buy more to keep generating."}
+          ? "Sign in to start — a new account comes with 3 free generations."
+          : brand
+            ? `Writing as ${brand.name} · ${brand.tone} tone · three channels per idea.`
+            : unlimited
+              ? "Unlimited generations on your plan · three channels per idea."
+              : credits > 0
+                ? `${credits} free ${creditWord} left · each generation returns all three channels.`
+                : "You're out of free generations — upgrade to keep going."}
       </p>
     </form>
   );
