@@ -14,7 +14,8 @@
  * (gsk_…), so setting AI_API_KEY alone is enough.
  *
  * Billing: subscribers generate without limit; everyone else spends one of
- * their free starter credits per generation.
+ * their free test credits per generation, and only once the address is
+ * verified.
  * ---------------------------------------------------------------------------
  */
 
@@ -314,6 +315,15 @@ async function handler(req, res) {
     if (!user) {
       return send(res, 401, { error: "Sign in to generate content.", code: "auth_required" });
     }
+
+    /* Free credits are locked until the address is confirmed. */
+    if (!user.emailVerified) {
+      return send(res, 403, {
+        error: "Verify your email address first — that's what unlocks your free test credits.",
+        code: "email_unverified",
+      });
+    }
+
     unlimited = isSubscribed(user.plan, user.subscriptionStatus);
     if (!unlimited && user.credits < 1) {
       return send(res, 402, {
