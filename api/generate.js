@@ -1,53 +1,27 @@
 /**
  * api/generate.js — POST /api/generate
  * ---------------------------------------------------------------------------
- * Vercel turns every file inside /api into its own endpoint, so this file is
- * what the frontend's fetch("/api/generate") hits in production. On a static
- * host there is no /api, which is why generate used to 404.
+ * One idea in, three channels out: LinkedIn, Instagram/Facebook and a TikTok /
+ * Reels script. If the account has a Brand Vault profile, its context is
+ * injected into the prompt so the user never repeats themselves.
  *
  * The AI key lives in the Vercel project's Environment Variables, so the
  * browser bundle never sees it. Any OpenAI-compatible provider works — switch
- * by setting AI_BASE_URL and AI_MODEL (OpenAI, Groq, Together, OpenRouter,
- * DeepSeek, …). Nothing here needs installing: only Node built-ins are used.
+ * by setting AI_BASE_URL and AI_MODEL. Groq is detected from the key prefix
+ * (gsk_…), so setting AI_API_KEY alone is enough.
  *
- * Groq is detected from the key prefix (gsk_…), so setting AI_API_KEY alone is
- * enough — the base URL and a current model are chosen for you. Retired Groq
- * model IDs are mapped to their replacement, and the marketing site is
- * corrected to the real API host, so a stale tutorial value can't 404 the app.
+ * Billing: subscribers generate without limit; everyone else spends one of
+ * their free starter credits per generation.
  * ---------------------------------------------------------------------------
  */
 
 import { currentUser } from "./_lib/auth.js";
 import { ensureSchema, hasDatabase, query } from "./_lib/db.js";
 import { readBody, send } from "./_lib/http.js";
+import { isSubscribed } from "./_lib/plans.js";
 
-const AI_TIMEOUT_MS = 45000;
+const AI_TIMEOUT_MS = 60000;
 const MAX_TOPIC_LENGTH = 400;
-
-/* Keep these tables in sync with src/App.jsx. */
-const PLATFORMS = {
-  instagram: {
-    label: "Instagram",
-    limit: 2200,
-    guidance: "Visual, warm, line breaks for readability, hashtags at the end.",
-  },
-  x: { label: "X / Twitter", limit: 280, guidance: "One sharp idea, no fluff, at most 2 hashtags." },
-  linkedin: {
-    label: "LinkedIn",
-    limit: 3000,
-    guidance: "Professional but human, short paragraphs, a takeaway or lesson.",
-  },
-  tiktok: {
-    label: "TikTok",
-    limit: 2200,
-    guidance: "Hook in the first 5 words, casual voice, trend-aware.",
-  },
-  facebook: {
-    label: "Facebook",
-    limit: 63206,
-    guidance: "Conversational, invite a reply, light on hashtags.",
-  },
-};
 
 const TONES = {
   friendly: "warm and friendly",
@@ -57,14 +31,40 @@ const TONES = {
   inspirational: "uplifting and inspiring",
 };
 
+/* The anti-AI filter, spelled out. These are the tells readers notice first. */
+const BANNED = [
+  "in today's fast-paced world",
+  "in the ever-evolving landscape",
+  "delve",
+  "tapestry",
+  "game-changer",
+  "game changer",
+  "unlock",
+  "unleash",
+  "elevate",
+  "seamless",
+  "leverage",
+  "revolutionary",
+  "cutting-edge",
+  "dive into",
+  "let's dive in",
+  "testament to",
+  "it's not just",
+  "foster",
+  "robust",
+  "empower",
+  "synergy",
+  "paradigm",
+  "ever-changing",
+];
+
 /* -------------------------------------------------------------------------- */
-/*  Helpers                                                                  */
+/*  Provider plumbing                                                        */
 /* -------------------------------------------------------------------------- */
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 
-/* Groq retired these IDs (see console.groq.com/docs/deprecations). */
 const RETIRED_GROQ_MODELS = {
   "llama3-8b-8192": "openai/gpt-oss-20b",
   "llama3-70b-8192": "openai/gpt-oss-120b",
@@ -72,15 +72,8 @@ const RETIRED_GROQ_MODELS = {
   "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
 };
 
-/**
- * Accept the shapes people actually paste — the marketing site, the bare API
- * host, a full /chat/completions URL — and reduce them to the base URL that
- * `${baseUrl}/chat/completions` needs. Every wrong shape here is a silent 404.
- */
 function normalizeBaseUrl(raw, isGroq) {
-  let url = String(raw || "")
-    .trim()
-    .replace(/\/+$/, "");
+  let url = String(raw || "").trim().replace(/\/+$/, "");
   if (!url) url = isGroq ? GROQ_BASE_URL : OPENAI_BASE_URL;
 
   url = url.replace(/\/chat\/completions$/i, "");
@@ -105,29 +98,47 @@ function aiConfig() {
   };
 }
 
-/* send() and readBody() live in api/_lib/http.js, shared with the other routes. */
+/* -------------------------------------------------------------------------- */
+/*  Prompt                                                                   */
+/* -------------------------------------------------------------------------- */
 
-function buildPrompt({ topic, platform, tone, count }) {
-  const target = PLATFORMS[platform];
-  const toneText = TONES[tone];
+function buildPrompt({ topic, tone, brand }) {
+  const toneText = TONES[tone] || TONES.friendly;
+  const truthy = (value) => Boolean(value && String(value).trim());
+
+  const context = truthy(brand)
+    ? [
+        `Brand or creator: ${brand.name}`,
+        `Audience: ${brand.audience}`,
+        `Core offer / niche: ${brand.offer}`,
+        `Brand tone of voice: ${TONES[brand.tone] || brand.tone}`,
+      ]
+    : ["No saved brand profile — stay concrete about the idea and avoid invented facts."];
 
   return [
-    `You are a senior social media copywriter. Write ${count} distinct ${target.label} captions.`,
+    "You are a senior content strategist writing one idea for three channels at once.",
     "",
-    `Topic: ${topic}`,
-    `Tone: ${toneText}`,
-    `Platform style: ${target.guidance}`,
-    `Hard limit: each caption must be ${target.limit} characters or fewer, hashtags included.`,
+    "BRAND CONTEXT — fixed, never contradict it:",
+    ...context.map((line) => `- ${line}`),
     "",
-    "Rules:",
-    "- Open with a scroll-stopping first line.",
-    "- Give each option a different angle (question, story, bold claim, tip, etc.).",
-    "- Maximum 2 emoji per caption.",
-    "- No numbering or labels inside the caption text.",
-    "- 3 to 6 relevant hashtags per caption.",
+    `IDEA: ${topic}`,
+    `Default tone: ${toneText}`,
     "",
-    "Reply with JSON only, exactly in this shape:",
-    '{"variants":[{"text":"the caption body","hashtags":["#one","#two"]}]}',
+    "Answer with exactly this JSON object and nothing else:",
+    '{"linkedin":{"text":"..."},"instagram":{"text":"...","hashtags":["#one","#two"]},"tiktok":{"hook":"...","script":"..."}}',
+    "",
+    "LINKEDIN: a strong hook on its own first line, a short story or specific insight taken from the idea, then one clear call to action. 110-200 words, short paragraphs. No hashtags, no emojis, no markdown.",
+    "INSTAGRAM / FACEBOOK: a scroll-stopping first line, 2-4 short paragraphs, one call to action. Put 5-8 relevant hashtags in the hashtags array, never inside text. Under 2,000 characters, at most one emoji.",
+    "TIKTOK / REELS: \"hook\" is the first three seconds — the visual action plus the spoken line, at most 20 words. \"script\" is the spoken script, 90-150 words, with natural beats and a closing line. No hashtags, no emojis, no camera directions past the hook.",
+    "",
+    "VOICE RULES — strict:",
+    "- Sound like one specific human with first-hand knowledge: concrete details, plain words, sentences of different lengths.",
+    `- Never use these words or phrases: ${BANNED.map((word) => `"${word}"`).join(", ")}.`,
+    "- No emojis, except at most one in the Instagram caption.",
+    "- No hashtags in LinkedIn or TikTok, ever.",
+    "- No bullet-point emoji lists, no \"Here's the thing\", no \"Ever wondered…\" openers, no \"And that's why\" endings.",
+    "- Never invent statistics, prices, client names or testimonials that are not in the brief.",
+    "- JSON only.",
   ].join("\n");
 }
 
@@ -159,40 +170,62 @@ function extractJson(raw) {
   return null;
 }
 
-function normalizeVariants(content) {
-  const parsed = extractJson(content);
-  const list =
-    Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.variants) ? parsed.variants : null;
-
-  const cleaned = (list || [])
-    .map((item) => {
-      if (typeof item === "string") return { text: item.trim(), hashtags: [] };
-      if (!item || typeof item !== "object") return null;
-      const text = String(item.text ?? item.caption ?? "").trim();
-      if (!text) return null;
-      const hashtags = Array.isArray(item.hashtags)
-        ? item.hashtags.map((tag) => String(tag).trim()).filter(Boolean)
-        : [];
-      return { text, hashtags };
-    })
+function cleanTags(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((tag) => String(tag).trim())
     .filter(Boolean)
-    .slice(0, 4);
+    .map((tag) => (/^#/.test(tag) ? tag : `#${tag.replace(/^#+/g, "")}`))
+    .slice(0, 12);
+}
 
-  if (cleaned.length > 0) return cleaned;
+/** Turn whatever the model said into the three channels, or null. */
+export function normalizeChannels(content) {
+  const parsed = extractJson(content);
+  if (!parsed || typeof parsed !== "object") return null;
 
-  /* Fallback: the model ignored the JSON instruction. Keep its prose. */
-  const fallbackText = String(content || "").trim();
-  return fallbackText ? [{ text: fallbackText, hashtags: [] }] : [];
+  const part = (key) => (parsed[key] && typeof parsed[key] === "object" ? parsed[key] : {});
+  const text = (value) => String(value?.text ?? value?.caption ?? "").trim();
+
+  const linkedin = text(part("linkedin"));
+  const instagram = text(part("instagram"));
+  const tiktokPart = part("tiktok");
+  const hook = String(tiktokPart.hook ?? tiktokPart.visual_hook ?? "").trim();
+  const script = String(tiktokPart.script ?? tiktokPart.text ?? "").trim();
+
+  if (!linkedin && !instagram && !script) return null;
+
+  return {
+    linkedin: { text: linkedin },
+    instagram: { text: instagram, hashtags: cleanTags(part("instagram").hashtags) },
+    tiktok: { hook, script },
+  };
 }
 
 /** Pull the assistant text out of a chat-completions payload. */
 function readContent(payload) {
   const message = payload?.choices?.[0]?.message?.content;
   if (Array.isArray(message)) {
-    return message.map((part) => (typeof part === "string" ? part : part?.text || "")).join("");
+    return message.map((piece) => (typeof piece === "string" ? piece : piece?.text || "")).join("");
   }
   if (typeof message === "string") return message;
   return payload?.choices?.[0]?.text || "";
+}
+
+/** The saved brand profile to write in, if the account has one. */
+async function loadBrand(userId, brandId) {
+  if (!userId) return null;
+  const wanted = String(brandId || "").trim();
+  const { rows } = wanted
+    ? await query(
+        "select id, name, audience, offer, tone from brand_vaults where id = $1 and user_id = $2",
+        [wanted, userId],
+      )
+    : await query(
+        "select id, name, audience, offer, tone from brand_vaults where user_id = $1 order by updated_at desc limit 1",
+        [userId],
+      );
+  return rows[0] || null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -207,49 +240,42 @@ async function handler(req, res) {
 
   const body = await readBody(req);
   const topic = String(body.topic || "").trim();
-  const platform = String(body.platform || "instagram");
-  const tone = String(body.tone || "friendly");
-  const count = Math.min(3, Math.max(1, Number(body.count) || 3));
+  const tone = String(body.tone || "").trim().toLowerCase() || "friendly";
+  const brandId = String(body.brandId || "").trim();
 
-  if (!topic) {
-    return send(res, 400, { error: "Send a topic for the post." });
-  }
+  if (!topic) return send(res, 400, { error: "Send an idea for the content." });
   if (topic.length > MAX_TOPIC_LENGTH) {
-    return send(res, 400, { error: `Keep the topic under ${MAX_TOPIC_LENGTH} characters.` });
+    return send(res, 400, { error: `Keep the idea under ${MAX_TOPIC_LENGTH} characters.` });
   }
-  if (!PLATFORMS[platform]) {
-    return send(res, 400, { error: `Unknown platform "${platform}".` });
-  }
-  if (!TONES[tone]) {
+  if (body.tone && !TONES[tone]) {
     return send(res, 400, { error: `Unknown tone "${tone}".` });
   }
 
-  /* Accounts are optional. With no database configured the app still works in
-     guest mode; once DATABASE_URL exists, generating costs one credit. If the
-     account lookup itself breaks, we keep generating rather than take the whole
-     feature down over a database hiccup. */
+  /* Accounts are optional. With no database the app still works in guest mode;
+     once DATABASE_URL exists, generation is gated by plan. */
   let gating = false;
   let user = null;
+  let brand = null;
   if (hasDatabase()) {
     try {
       await ensureSchema();
       user = await currentUser(req);
       gating = true;
+      if (user) brand = await loadBrand(user.id, brandId);
     } catch (err) {
       console.error("[generate] accounts unavailable, serving as guest:", err?.message || err);
     }
   }
 
+  let unlimited = false;
   if (gating) {
     if (!user) {
-      return send(res, 401, {
-        error: "Sign in to generate captions.",
-        code: "auth_required",
-      });
+      return send(res, 401, { error: "Sign in to generate content.", code: "auth_required" });
     }
-    if (user.credits < 1) {
+    unlimited = isSubscribed(user.plan, user.subscriptionStatus);
+    if (!unlimited && user.credits < 1) {
       return send(res, 402, {
-        error: "You're out of credits — buy more to keep generating.",
+        error: "You've used your free generations — upgrade to keep going.",
         code: "no_credits",
       });
     }
@@ -263,12 +289,9 @@ async function handler(req, res) {
     });
   }
 
+  const effectiveTone = brand?.tone || tone;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-
-  /* Groq's gpt-oss / qwen models spend part of max_tokens on hidden reasoning,
-     which can eat the whole budget and return an empty caption. Ask for light
-     reasoning where the model supports it. */
   const tunable = /api\.groq\.com/.test(baseUrl) && /gpt-oss|qwen/i.test(model);
 
   async function ask() {
@@ -281,16 +304,16 @@ async function handler(req, res) {
       },
       body: JSON.stringify({
         model,
-        temperature: 0.85,
-        max_tokens: 1600,
+        temperature: 0.8,
+        max_tokens: 2000,
         ...(tunable ? { reasoning_effort: "low" } : {}),
         messages: [
           {
             role: "system",
             content:
-              "You are an expert social media copywriter. You always answer with valid JSON and nothing else.",
+              "You are an expert multi-channel content strategist. You always answer with valid JSON and nothing else.",
           },
-          { role: "user", content: buildPrompt({ topic, platform, tone, count }) },
+          { role: "user", content: buildPrompt({ topic, tone: effectiveTone, brand }) },
         ],
       }),
     });
@@ -324,28 +347,30 @@ async function handler(req, res) {
       return send(res, 502, { error: `AI provider error: ${detail}` });
     }
 
-    let variants = normalizeVariants(readContent(payload));
+    let channels = normalizeChannels(readContent(payload));
 
     /* Reasoning models occasionally answer with nothing but thinking. One
        silent retry is cheaper for the user than an error. */
-    if (variants.length === 0 && !controller.signal.aborted) {
+    if (!channels && !controller.signal.aborted) {
       const second = await ask();
       if (second.upstream.ok) {
-        const retried = normalizeVariants(readContent(second.payload));
-        if (retried.length > 0) {
-          variants = retried;
+        const retried = normalizeChannels(readContent(second.payload));
+        if (retried) {
+          channels = retried;
           payload = second.payload;
         }
       }
     }
 
-    if (variants.length === 0) {
-      return send(res, 502, { error: "The AI returned an empty caption. Try rephrasing the topic." });
+    if (!channels) {
+      return send(res, 502, {
+        error: "The AI sent back an empty answer. Try rephrasing the idea.",
+      });
     }
 
-    /* Charge only for a caption the user actually gets. */
+    /* Subscribers are unlimited; everyone else spends one free credit. */
     let credits = null;
-    if (gating && user) {
+    if (gating && user && !unlimited) {
       try {
         const spent = await query(
           "update app_users set credits = credits - 1 where id = $1 and credits > 0 returning credits",
@@ -358,7 +383,11 @@ async function handler(req, res) {
     }
 
     return send(res, 200, {
-      variants,
+      channels,
+      brand: brand
+        ? { id: brand.id, name: brand.name, audience: brand.audience, offer: brand.offer, tone: brand.tone }
+        : null,
+      unlimited,
       model,
       usage: payload?.usage || null,
       ...(credits === null ? {} : { credits }),
@@ -377,4 +406,4 @@ async function handler(req, res) {
 }
 
 export default handler;
-export { buildPrompt, normalizeVariants };
+export { buildPrompt };
