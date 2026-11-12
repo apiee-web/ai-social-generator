@@ -1,6 +1,6 @@
 /**
- * styles-omni.js — the extra rules for the Brand Vault, channel tabs and the
- * verification banner.
+ * styles-omni.js — the extra rules for the Brand Vault, Voice DNA, channel tabs
+ * and the verification banner.
  * ---------------------------------------------------------------------------
  * Kept apart from styles.js so the base sheet (and its phone breakpoints) stays
  * untouched. App.jsx injects both with <style> tags.
@@ -36,6 +36,36 @@ export const OMNI_CSS = `
   font-weight: 700;
 }
 .aisg-submit-upgrade:hover { background: rgba(91, 83, 240, 0.08); }
+
+.aisg-voice {
+  margin-top: 14px; padding: 12px 14px;
+  border: 1px solid rgba(91, 83, 240, 0.28); border-radius: 12px;
+  background: linear-gradient(180deg, #f8f7ff, #f3f2ff);
+}
+.aisg-voice-badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--accent);
+}
+.aisg-voice-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px rgba(91, 83, 240, 0.18);
+}
+.aisg-voice-summary {
+  margin-top: 7px; font-size: 12.5px; line-height: 1.65; color: #4b4a63;
+  white-space: pre-line; max-height: 132px; overflow: auto;
+}
+.aisg-vault-dna { margin-left: 6px; color: var(--accent); font-size: 11px; }
+.aisg-voice-field { margin-top: 14px; }
+.aisg-voice-textarea {
+  min-height: 96px; resize: vertical; line-height: 1.6;
+  font-size: 13.5px; font-family: inherit;
+}
+.aisg-voice-helper {
+  font-size: 12px; font-weight: 400; letter-spacing: 0; text-transform: none;
+  color: var(--muted); line-height: 1.6; margin-top: 2px;
+}
+.aisg-voice-note { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
 
 .aisg-vault { margin-bottom: 18px; }
 .aisg-vault-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
@@ -118,5 +148,6 @@ export const OMNI_CSS = `
   .aisg-verify-form { display: grid; grid-template-columns: 1fr; }
   .aisg-verify-code { width: 100%; }
   .aisg-verify-form .aisg-btn { width: 100%; }
+  .aisg-vault-actions .aisg-btn { width: 100%; }
 }
 `;
