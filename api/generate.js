@@ -5,6 +5,9 @@
  * Reels script. If the account has a Brand Vault profile, its context is
  * injected into the prompt so the user never repeats themselves.
  *
+ * The language of the idea decides the language of the whole answer: the model
+ * reports `detected_language` first and every field must follow it exactly.
+ *
  * The AI key lives in the Vercel project's Environment Variables, so the
  * browser bundle never sees it. Any OpenAI-compatible provider works — switch
  * by setting AI_BASE_URL and AI_MODEL. Groq is detected from the key prefix
@@ -118,6 +121,8 @@ function buildPrompt({ topic, tone, brand }) {
   return [
     "You are a senior content strategist writing one idea for three channels at once.",
     "",
+    "STEP 1 — LANGUAGE: read the IDEA and detect the language it is written in. Dutch input means every word of the answer is Dutch. English input means every word is English. Any other language: answer fully in that language. Never mix — a single sentence in another language is a failure.",
+    "",
     "BRAND CONTEXT — fixed, never contradict it:",
     ...context.map((line) => `- ${line}`),
     "",
@@ -125,11 +130,14 @@ function buildPrompt({ topic, tone, brand }) {
     `Default tone: ${toneText}`,
     "",
     "Answer with exactly this JSON object and nothing else:",
-    '{"linkedin":{"text":"..."},"instagram":{"text":"...","hashtags":["#one","#two"]},"tiktok":{"hook":"...","script":"..."}}',
+    '{"detected_language":"Dutch","linkedin":{"text":"..."},"instagram":{"text":"...","hashtags":["#one","#two"]},"tiktok":{"hook":"...","script":"..."}}',
     "",
-    "LINKEDIN: a strong hook on its own first line, a short story or specific insight taken from the idea, then one clear call to action. 110-200 words, short paragraphs. No hashtags, no emojis, no markdown.",
-    "INSTAGRAM / FACEBOOK: a scroll-stopping first line, 2-4 short paragraphs, one call to action. Put 5-8 relevant hashtags in the hashtags array, never inside text. Under 2,000 characters, at most one emoji.",
-    "TIKTOK / REELS: \"hook\" is the first three seconds — the visual action plus the spoken line, at most 20 words. \"script\" is the spoken script, 90-150 words, with natural beats and a closing line. No hashtags, no emojis, no camera directions past the hook.",
+    '\"detected_language\": the language you detected, named in English (\"Dutch\", \"English\", …). It decides the language of every other field.',
+    "",
+    "LINKEDIN: a strong hook on its own first line, a short story or specific insight taken from the idea, then one clear call to action. 110-200 words. Paragraphs of at most two sentences each, separated by a blank line (\\n\\n). No hashtags, no emojis, no markdown.",
+    "INSTAGRAM / FACEBOOK: a scroll-stopping first line and one clear call to action. Paragraphs of at most two sentences each, separated by a blank line (\\n\\n). Exactly 5-7 relevant hashtags in the hashtags array, never inside the text. Under 2,000 characters, at most one emoji.",
+    "TIKTOK / REELS: \"hook\" is the first three seconds, at most 12 words — the spoken line only, no camera or visual direction. \"script\" is the spoken script, at most 350 characters, with natural beats and a closing line. No hashtags, no emojis, no stage or camera directions, no text in brackets.",
+    "Every field — linkedin.text, instagram.text, tiktok.hook and tiktok.script — is written 100% in detected_language.",
     "",
     "VOICE RULES — strict:",
     "- Sound like one specific human with first-hand knowledge: concrete details, plain words, sentences of different lengths.",
@@ -170,13 +178,46 @@ function extractJson(raw) {
   return null;
 }
 
+const MAX_HOOK_WORDS = 12;
+const MAX_SCRIPT_CHARS = 350;
+const MAX_HASHTAGS = 7;
+
 function cleanTags(value) {
   if (!Array.isArray(value)) return [];
   return value
     .map((tag) => String(tag).trim())
     .filter(Boolean)
     .map((tag) => (/^#/.test(tag) ? tag : `#${tag.replace(/^#+/g, "")}`))
-    .slice(0, 12);
+    .slice(0, MAX_HASHTAGS);
+}
+
+/* Emojis, bracketed stage directions and hashtags have no place in a spoken
+   TikTok script, so they are removed even if the model ignores the rules. */
+const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/gu;
+const STAGE_DIRECTION = /\[[^\]]*\]|\([^)]*(?:camera|cut|zoom|pan|shot|scene|close[- ]?up|text on screen|voice ?over|b-roll)[^)]*\)/gi;
+
+function spoken(value, { maxWords, maxChars } = {}) {
+  let text = String(value || "")
+    .replace(STAGE_DIRECTION, " ")
+    .replace(EMOJI, "")
+    .replace(/(^|\s)#[\p{L}\p{N}_]+/gu, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  if (maxWords && text.split(/\s+/).filter(Boolean).length > maxWords) {
+    text = `${text.split(/\s+/).slice(0, maxWords).join(" ").replace(/[,;:]$/, "")}.`;
+  }
+
+  if (maxChars && text.length > maxChars) {
+    const cut = text.slice(0, maxChars);
+    const lastStop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+    text =
+      lastStop > maxChars * 0.5
+        ? cut.slice(0, lastStop + 1).trim()
+        : `${cut.slice(0, cut.lastIndexOf(" ")).replace(/[,;:]$/, "")}.`;
+  }
+
+  return text;
 }
 
 /** Turn whatever the model said into the three channels, or null. */
@@ -190,12 +231,13 @@ export function normalizeChannels(content) {
   const linkedin = text(part("linkedin"));
   const instagram = text(part("instagram"));
   const tiktokPart = part("tiktok");
-  const hook = String(tiktokPart.hook ?? tiktokPart.visual_hook ?? "").trim();
-  const script = String(tiktokPart.script ?? tiktokPart.text ?? "").trim();
+  const hook = spoken(tiktokPart.hook ?? tiktokPart.visual_hook, { maxWords: MAX_HOOK_WORDS });
+  const script = spoken(tiktokPart.script ?? tiktokPart.text, { maxChars: MAX_SCRIPT_CHARS });
 
   if (!linkedin && !instagram && !script) return null;
 
   return {
+    detectedLanguage: String(parsed.detected_language ?? parsed.language ?? "").trim(),
     linkedin: { text: linkedin },
     instagram: { text: instagram, hashtags: cleanTags(part("instagram").hashtags) },
     tiktok: { hook, script },
@@ -311,7 +353,7 @@ async function handler(req, res) {
           {
             role: "system",
             content:
-              "You are an expert multi-channel content strategist. You always answer with valid JSON and nothing else.",
+              "You are an expert multi-channel content strategist. You answer with valid JSON only, and every field is written in the language of the user's brief.",
           },
           { role: "user", content: buildPrompt({ topic, tone: effectiveTone, brand }) },
         ],
@@ -384,6 +426,7 @@ async function handler(req, res) {
 
     return send(res, 200, {
       channels,
+      detectedLanguage: channels.detectedLanguage || null,
       brand: brand
         ? { id: brand.id, name: brand.name, audience: brand.audience, offer: brand.offer, tone: brand.tone }
         : null,
