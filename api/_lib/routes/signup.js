@@ -1,5 +1,5 @@
 /**
- * api/auth/signup.js — POST /api/auth/signup
+ * api/_lib/routes/signup.js — POST /api/auth/signup
  * Body: { email, password }.
  *
  * Creates the account signed-in but UNVERIFIED, with the free test credits
@@ -12,12 +12,12 @@
 
 import { randomUUID } from "node:crypto";
 
-import { hashPassword, isEmail, normalizeEmail, publicUser, setSessionCookie, signSession } from "../_lib/auth.js";
-import { ensureSchema, query } from "../_lib/db.js";
-import { fail, methodNotAllowed, noStore, readBody, resolveOrigin, send } from "../_lib/http.js";
-import { sendVerificationEmail } from "../_lib/mail.js";
-import { FREE_CREDITS } from "../_lib/plans.js";
-import { isDisposableEmail, newVerification } from "../_lib/verify.js";
+import { hashPassword, isEmail, normalizeEmail, publicUser, setSessionCookie, signSession } from "../auth.js";
+import { ensureSchema, query } from "../db.js";
+import { fail, methodNotAllowed, noStore, readBody, resolveOrigin, send } from "../http.js";
+import { sendVerificationEmail } from "../mail.js";
+import { FREE_CREDITS } from "../plans.js";
+import { isDisposableEmail, newVerification } from "../verify.js";
 
 export default async function handler(req, res) {
   noStore(res);

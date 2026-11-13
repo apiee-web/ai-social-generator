@@ -1,5 +1,5 @@
 /**
- * api/auth/resend.js — POST /api/auth/resend
+ * api/_lib/routes/resend.js — POST /api/auth/resend
  * Body: { email } (defaults to the signed-in account).
  *
  * Issues a fresh token + code and emails it again. One request per minute per
@@ -7,11 +7,11 @@
  * Answers 200 either way, so it can't be used to discover which emails exist.
  */
 
-import { currentUser, normalizeEmail } from "../_lib/auth.js";
-import { ensureSchema, query } from "../_lib/db.js";
-import { fail, methodNotAllowed, noStore, readBody, resolveOrigin, send } from "../_lib/http.js";
-import { sendVerificationEmail } from "../_lib/mail.js";
-import { RESEND_COOLDOWN_SECONDS, newVerification } from "../_lib/verify.js";
+import { currentUser, normalizeEmail } from "../auth.js";
+import { ensureSchema, query } from "../db.js";
+import { fail, methodNotAllowed, noStore, readBody, resolveOrigin, send } from "../http.js";
+import { sendVerificationEmail } from "../mail.js";
+import { RESEND_COOLDOWN_SECONDS, newVerification } from "../verify.js";
 
 export default async function handler(req, res) {
   noStore(res);

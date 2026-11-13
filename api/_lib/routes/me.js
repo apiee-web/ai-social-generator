@@ -1,14 +1,14 @@
 /**
- * api/auth/me.js — GET /api/auth/me
+ * api/_lib/routes/me.js — GET /api/auth/me
  * Who is signed in, and how many credits they have left.
  *
  * Returns 503 when accounts aren't configured. The page reads that as "guest
  * mode" and keeps working, so a half-configured deploy never looks broken.
  */
 
-import { currentUser, publicUser } from "../_lib/auth.js";
-import { hasDatabase } from "../_lib/db.js";
-import { fail, methodNotAllowed, noStore, send } from "../_lib/http.js";
+import { currentUser, publicUser } from "../auth.js";
+import { hasDatabase } from "../db.js";
+import { fail, methodNotAllowed, noStore, send } from "../http.js";
 
 export default async function handler(req, res) {
   noStore(res);

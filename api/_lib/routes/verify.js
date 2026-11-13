@@ -1,15 +1,15 @@
 /**
- * api/auth/verify.js — POST /api/auth/verify
+ * api/_lib/routes/verify.js — POST /api/auth/verify
  * Body: { token } from the emailed link, or { email, code } from the email.
  *
  * Marks the address confirmed, clears the pending token/code and signs the
  * person in, so a link click lands them on a working generator.
  */
 
-import { isEmail, normalizeEmail, publicUser, setSessionCookie, signSession } from "../_lib/auth.js";
-import { ensureSchema, query } from "../_lib/db.js";
-import { fail, methodNotAllowed, noStore, readBody, send } from "../_lib/http.js";
-import { codeMatches } from "../_lib/verify.js";
+import { isEmail, normalizeEmail, publicUser, setSessionCookie, signSession } from "../auth.js";
+import { ensureSchema, query } from "../db.js";
+import { fail, methodNotAllowed, noStore, readBody, send } from "../http.js";
+import { codeMatches } from "../verify.js";
 
 const COLUMNS =
   "id, email, credits, plan, subscription_status, current_period_end, email_verified, verification_hash";

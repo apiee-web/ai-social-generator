@@ -1,5 +1,5 @@
 /**
- * api/auth/login.js — POST /api/auth/login
+ * api/_lib/routes/login.js — POST /api/auth/login
  * Body: { email, password }.
  */
 
@@ -10,9 +10,9 @@ import {
   setSessionCookie,
   signSession,
   verifyPassword,
-} from "../_lib/auth.js";
-import { ensureSchema, query } from "../_lib/db.js";
-import { fail, methodNotAllowed, noStore, readBody, send } from "../_lib/http.js";
+} from "../auth.js";
+import { ensureSchema, query } from "../db.js";
+import { fail, methodNotAllowed, noStore, readBody, send } from "../http.js";
 
 export default async function handler(req, res) {
   noStore(res);
