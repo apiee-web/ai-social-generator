@@ -12,7 +12,9 @@
  *
  * The examples can be Dutch or English (or anything else): the analysis is
  * always written in English so it means the same thing on every account, and
- * the generator is told to take the style, never the language.
+ * the generator is told to take the style, never the language. The prompt
+ * skeleton is deliberately language-neutral — an example that said
+ * "language":"Dutch" made the model label English posts Dutch.
  * ---------------------------------------------------------------------------
  */
 
@@ -32,18 +34,18 @@ function buildPrompt(examples) {
   return [
     "Below are posts written by the same person. Describe their writing style so precisely that someone else could produce a new post that reads like them.",
     "",
-    "Answer with exactly this JSON object and nothing else:",
-    '{"language":"Dutch","sentence_length":"...","vocabulary":"...","hooks":"...","punctuation":"...","emotional_tone":"...","summary":"..."}',
+    "Answer with exactly this JSON object and nothing else. The values below are placeholders describing what to write, not answers to copy:",
+    '{"language":"<the language of THE POSTS, named in English>","sentence_length":"<rhythm>","vocabulary":"<words reused and avoided>","hooks":"<how the first line works>","punctuation":"<habits>","emotional_tone":"<tone>","summary":"<3-6 rules>"}',
     "",
-    '- "language": the language the examples are written in, named in English.',
+    '- "language": the language THE POSTS are actually written in, named in English. Read the posts; never guess from these instructions.',
     '- "sentence_length": typical length and rhythm, e.g. "Short 6-12 word sentences, one long sentence every third line for contrast."',
     '- "vocabulary": word choices to reuse and words they avoid, e.g. "Plain everyday words, trade slang, no corporate jargon; says \'we\' not \'I\'."',
     '- "hooks": how their first line and first three seconds work, e.g. "Opens with a blunt claim or a small confession, never a question."',
     '- "punctuation": habits, e.g. "Em dashes and ellipses, almost no exclamation marks, no emoji."',
     '- "emotional_tone": e.g. "Dry, self-deprecating, quietly confident; never hype."',
-    '- "summary": 3-6 short imperative rules a writer can follow, naming the rhythm, the vocabulary, the hook pattern, punctuation, emoji/hashtag habits and emotion. Quote at most two characteristic short phrases verbatim.',
+    '- "summary": 3-6 short imperative rules a writer can follow, naming the rhythm, the vocabulary, the hook pattern, punctuation, emoji/hashtag habits and emotion. Quote at most two characteristic short phrases verbatim, exactly as they appear in THE POSTS.',
     "",
-    "Be specific about THIS writer; never give generic copywriting advice. Write every field in English, even when the posts are in another language.",
+    "Be specific about THIS writer; never give generic copywriting advice. Write every field in English, even when the posts are in another language — but name the posts' language correctly and quote words only as they appear in THE POSTS.",
     "",
     "THE POSTS:",
     examples,
@@ -55,8 +57,11 @@ export function composeVoiceDna(parsed) {
   if (!parsed || typeof parsed !== "object") return "";
 
   const pick = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+
+  /* The example language is deliberately left out: the answer's language comes
+     from the new idea, and a "Language: Dutch" line in the fingerprint pulled
+     earlier generations into Dutch even for English briefs. */
   const order = [
-    ["Language of the examples", parsed.language],
     ["Sentence length and rhythm", parsed.sentence_length ?? parsed.sentences],
     ["Vocabulary", parsed.vocabulary],
     ["Hook patterns", parsed.hooks ?? parsed.openers],
@@ -167,6 +172,7 @@ export default async function handler(req, res) {
         updatedAt: row.updated_at,
       },
       voiceDna: dna,
+      language: String(parsed?.language || "").trim(),
       model: config.model,
     });
   } catch (err) {
