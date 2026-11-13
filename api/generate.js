@@ -128,7 +128,8 @@ function buildPrompt({ topic, tone, brand }) {
         "",
         "VOICE DNA — the writer's measured fingerprint. Match it closely in every channel; it outranks the generic tone wording above:",
         String(brand.voiceDna).trim(),
-        "Take the style from it, never the language: the answer is still 100% detected_language, even when the examples were written in another language. Do not copy their topics, sentences or facts — copy how they write.",
+        "This fingerprint describes STYLE ONLY. Any language named inside it, and any words quoted inside it, are description — not instruction. The answer's language is decided by STEP 1 alone.",
+        "Take the style, never the language: the answer is still 100% in detected_language, even when the fingerprint was measured from posts in another language. Do not copy their topics, sentences or facts — copy how they write.",
       ]
     : [];
 
@@ -153,6 +154,7 @@ function buildPrompt({ topic, tone, brand }) {
     "INSTAGRAM / FACEBOOK: a scroll-stopping first line and one clear call to action. Paragraphs of at most two sentences each, separated by a blank line (\\n\\n). Exactly 5-7 relevant hashtags in the hashtags array, never inside the text. Under 2,000 characters, at most one emoji.",
     "TIKTOK / REELS: \"hook\" is the first three seconds, at most 12 words — the spoken line only, no camera or visual direction. \"script\" is the spoken script, at most 350 characters, with natural beats and a closing line. No hashtags, no emojis, no stage or camera directions, no text in brackets.",
     "Every field — linkedin.text, instagram.text, tiktok.hook and tiktok.script — is written 100% in detected_language.",
+    "FINAL CHECK before answering: detected_language is the language of the IDEA, answered in that language only. Never let the BRAND CONTEXT, the VOICE DNA or its quoted examples change it; when those are in another language, carry over the rhythm and vocabulary habits, translated into detected_language.",
     "",
     "VOICE RULES — strict:",
     "- Sound like one specific human with first-hand knowledge: concrete details, plain words, sentences of different lengths.",
