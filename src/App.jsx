@@ -80,6 +80,7 @@ export default function App({ apiBase = "" }) {
   const [pricingOpen, setPricingOpen] = useState(false);
   const [purchasing, setPurchasing] = useState(null);
   const [pricingError, setPricingError] = useState(null);
+  const [billingBusy, setBillingBusy] = useState(false);
 
   const [keyMissing, setKeyMissing] = useState(false);
 
@@ -183,6 +184,7 @@ export default function App({ apiBase = "" }) {
         const params = new URLSearchParams(window.location.search);
         const token = params.get("verify");
         const state = params.get("checkout");
+        const billing = params.get("billing");
 
         if (state === "success") {
           setNotice("Payment received — your plan and credits are syncing.");
@@ -196,6 +198,16 @@ export default function App({ apiBase = "" }) {
           setNotice("Checkout cancelled — no charge was made.");
           if (noticeTimer.current) clearTimeout(noticeTimer.current);
           noticeTimer.current = setTimeout(() => setNotice(null), 6000);
+        }
+
+        if (billing === "return") {
+          setNotice("Billing updated — your plan is syncing.");
+          if (noticeTimer.current) clearTimeout(noticeTimer.current);
+          noticeTimer.current = setTimeout(() => setNotice(null), 9000);
+          /* Stripe applies plan changes asynchronously; check twice. */
+          setTimeout(() => {
+            if (alive) refreshSession();
+          }, 1500);
         }
 
         if (token) {
@@ -214,10 +226,11 @@ export default function App({ apiBase = "" }) {
           }
         }
 
-        if (state || token) {
+        if (state || token || billing) {
           params.delete("checkout");
           params.delete("session_id");
           params.delete("verify");
+          params.delete("billing");
           const query = params.toString();
           window.history.replaceState(
             {},
@@ -578,6 +591,37 @@ export default function App({ apiBase = "" }) {
     }
   }
 
+  /* Billing portal: Stripe hosts the card update, plan switch and cancel
+     screens, so the app never touches card details. */
+  async function handleManageBilling() {
+    if (billingBusy) return;
+
+    setBillingBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`${base}/api/stripe/portal`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (response.status === 401) {
+        setAuthOpen(true);
+        return;
+      }
+      if (response.ok && data.url) {
+        window.location.assign(data.url);
+        return;
+      }
+      throw new Error(data.error || `Couldn't open billing (${response.status}).`);
+    } catch (err) {
+      setError(String(err?.message || err));
+    } finally {
+      setBillingBusy(false);
+    }
+  }
+
   async function handleSignOut() {
     try {
       await fetch(`${base}/api/auth/logout`, { method: "POST", credentials: "same-origin" });
@@ -658,6 +702,8 @@ export default function App({ apiBase = "" }) {
           }}
           onSignIn={() => setAuthOpen(true)}
           onSignOut={handleSignOut}
+          billingBusy={billingBusy}
+          onManageBilling={handleManageBilling}
         />
 
         {keyMissing && (
@@ -745,8 +791,10 @@ export default function App({ apiBase = "" }) {
         cloud={cloud}
         signedIn={Boolean(user)}
         plan={user?.plan}
+        billingBusy={billingBusy}
         onClose={() => setPricingOpen(false)}
         onSelect={handlePurchase}
+        onManageBilling={handleManageBilling}
       />
 
       <AuthModal
