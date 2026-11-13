@@ -54,6 +54,10 @@ export default function BrandHeader({
           <strong>{unlimited ? "Unlimited" : credits}</strong>
           {unlimited ? (
             <span className="aisg-credits-label">{planLabel}</span>
+          ) : credits > creditTotal ? (
+            /* A grandfathered balance is bigger than the free allowance, so
+               "51 of 5" would be nonsense. */
+            <span className="aisg-credits-label">credits left</span>
           ) : (
             <span className="aisg-credits-label">
               of {creditTotal} {creditWord}

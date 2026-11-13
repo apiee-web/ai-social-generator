@@ -74,13 +74,20 @@ export default function BrandVaultPanel({
     }
   }
 
+  /* Analyze saves first, always. A brand that was never saved needs a row to
+     write to, and a brand edited since it was loaded must be analysed as it
+     looks now — not as it was on the server. */
   async function analyze() {
     if (analyzing || saving) return;
-    const result = await onAnalyze(draft);
+
+    const saved = await onSave(draft);
+    if (!saved || typeof saved !== "object" || !saved.id) return;
+
+    const result = await onAnalyze({ ...draft, id: saved.id });
     if (!result || typeof result !== "object") return;
     setDraft((current) => ({
       ...current,
-      id: result.id || current.id,
+      id: result.id || saved.id,
       examplePosts: result.examplePosts ?? current.examplePosts,
       voiceDna: result.voiceDna || current.voiceDna,
     }));

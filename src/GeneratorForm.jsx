@@ -115,7 +115,9 @@ export default function GeneratorForm({
               : unlimited
                 ? "Unlimited generations on your plan · three channels per idea."
                 : credits > 0
-                  ? `${credits} of ${creditTotal} free test credits left · each generation returns all three channels.`
+                  ? credits > creditTotal
+                    ? `${credits} credits left · each generation returns all three channels.`
+                    : `${credits} of ${creditTotal} free test credits left · each generation returns all three channels.`
                   : `You've used all ${creditTotal} free test credits — pick a plan to keep generating.`}
       </p>
     </form>
