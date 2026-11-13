@@ -53,7 +53,7 @@ export const OMNI_CSS = `
 }
 .aisg-voice-summary {
   margin-top: 7px; font-size: 12.5px; line-height: 1.65; color: #4b4a63;
-  white-space: pre-line; max-height: 132px; overflow: auto;
+  white-space: pre-line;
 }
 .aisg-vault-dna { margin-left: 6px; color: var(--accent); font-size: 11px; }
 .aisg-voice-field { margin-top: 14px; }
