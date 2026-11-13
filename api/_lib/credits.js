@@ -8,19 +8,28 @@
  *   • one-off credits — the older credit path is still honoured for any
  *     purchase that used it
  *
- * Two callers use this and both are safe to run in either order:
+ * Three callers use this and all are safe to run in any order:
  *   • /api/stripe/webhook — Stripe's own notification
  *   • /api/stripe/return  — the buyer's way back from Checkout
+ *   • /api/stripe/portal  — "manage billing", which only reads the customer id
+ *
+ * Plan resolution never trusts metadata alone. A subscription that was created
+ * outside /api/checkout (a Payment Link, the Stripe dashboard, a plan switched
+ * in the Customer Portal) has no `metadata.planId`, so the plan is read from
+ * the Price instead — and when even that is unknown, the account keeps the plan
+ * it already has. An active subscriber must never be dropped to "free" because
+ * a webhook payload was thin.
  *
  * `stripe_session_id` is UNIQUE, so a session credits exactly once no matter
  * how many times either route runs (Stripe retries failed deliveries for days).
+ * Subscription writes are plain updates, so replaying them is harmless.
  * ---------------------------------------------------------------------------
  */
 
 import { randomUUID } from "node:crypto";
 
 import { ensureSchema, query } from "./db.js";
-import { PLANS } from "./plans.js";
+import { PLANS, resolvePlan, subscriptionPrices } from "./plans.js";
 
 /** Pull the bits we trust out of a Checkout Session Stripe gave us. */
 export function readSession(session) {
@@ -49,6 +58,41 @@ export function isPaid(session) {
   return paymentStatus === "" || paymentStatus === "paid";
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Subscription state                                                       */
+/* -------------------------------------------------------------------------- */
+
+/** Unix seconds, Date, ISO string or null → Date or null. */
+function toDate(value) {
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null;
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return new Date(number * 1000);
+  return null;
+}
+
+/**
+ * One idempotent write, matched by subscription id (or customer id for the very
+ * first event, before we have stored one).
+ *
+ * `plan` may be null: that means "resolve failed, keep whatever the account
+ * already is" — never a silent downgrade.
+ */
+async function writeSubscriptionState({ subscriptionId, customerId, plan, status, endsAt }) {
+  await ensureSchema();
+  const { rows } = await query(
+    `update app_users
+        set plan = coalesce($1, plan),
+            subscription_status = $2,
+            current_period_end = coalesce($3, current_period_end),
+            stripe_subscription_id = coalesce(nullif($4, ''), stripe_subscription_id)
+      where stripe_subscription_id = $4
+         or ($5 <> '' and stripe_customer_id = $5)
+      returning id, plan, subscription_status`,
+    [plan, status, endsAt, subscriptionId || "", customerId || ""],
+  );
+  return rows;
+}
+
 /**
  * Switch the account onto a subscription plan.
  * Safe to repeat: it just rewrites the same state.
@@ -74,33 +118,129 @@ export async function activateSubscription(session) {
 }
 
 /**
- * Stripe's view of a subscription changed (renewed, cancelled, payment failed).
- * Matched by subscription id, or by customer id for the first update.
+ * Stripe's view of a subscription changed (created, renewed, cancelled, or a
+ * payment went past due). The plan comes from metadata, then from the Price.
  */
-export async function syncSubscription({ subscriptionId, customerId, planId, status, periodEnd }) {
-  if (!subscriptionId && !customerId) return { updated: false };
+export async function syncSubscription({ subscription, status, periodEnd } = {}) {
+  const data = subscription || {};
+  const subscriptionId = String(data.id || "");
+  const customerId = String(data.customer || "");
+  const state = String(status ?? data.status ?? "");
 
-  const state = String(status || "");
+  if (!subscriptionId && !customerId) {
+    return { updated: false, plan: null, status: state, reason: "no_subscription" };
+  }
+
   const alive = state === "active" || state === "trialing";
-  const plan = alive && PLANS[planId] ? planId : "free";
-  const endsAt = Number.isFinite(Number(periodEnd)) && Number(periodEnd) > 0
-    ? new Date(Number(periodEnd) * 1000)
-    : null;
+  const resolved = resolvePlan({
+    planId: data.metadata?.planId,
+    prices: subscriptionPrices(data),
+  });
 
-  await ensureSchema();
-  const { rows } = await query(
-    `update app_users
-        set plan = $1,
-            subscription_status = $2,
-            current_period_end = $3,
-            stripe_subscription_id = coalesce(nullif($4, ''), stripe_subscription_id)
-      where stripe_subscription_id = $4
-         or ($5 <> '' and stripe_customer_id = $5)
-      returning id, plan, subscription_status`,
-    [plan, state || "inactive", endsAt, subscriptionId || "", customerId || ""],
+  /* Alive: use the resolved plan or keep the current one. Dead: free. */
+  const plan = alive ? resolved : "free";
+  const endsAt = toDate(
+    periodEnd ?? data.current_period_end ?? data.items?.data?.[0]?.current_period_end,
   );
-  return { updated: rows.length > 0, plan, status: state };
+
+  const rows = await writeSubscriptionState({
+    subscriptionId,
+    customerId,
+    plan,
+    status: state || "inactive",
+    endsAt,
+  });
+
+  return {
+    updated: rows.length > 0,
+    plan: rows[0]?.plan ?? plan,
+    status: state || "inactive",
+  };
 }
+
+/**
+ * What an invoice tells us: which subscription it belongs to, which Price was
+ * billed, and when that period ends. Handles both the classic top-level
+ * `invoice.subscription` and the newer `parent.subscription_details`.
+ */
+export function invoiceDetails(invoice) {
+  const lines = Array.isArray(invoice?.lines?.data) ? invoice.lines.data : [];
+  const prices = lines.map((line) => line?.price).filter(Boolean);
+  const periodEnds = lines
+    .map((line) => Number(line?.period?.end))
+    .filter((end) => Number.isFinite(end) && end > 0);
+
+  return {
+    invoiceId: String(invoice?.id || ""),
+    customerId: String(invoice?.customer || ""),
+    subscriptionId: String(
+      invoice?.subscription ||
+        invoice?.parent?.subscription_details?.subscription ||
+        invoice?.subscription_details?.subscription ||
+        "",
+    ),
+    prices,
+    plan: resolvePlan({
+      planId: prices.map((price) => price?.metadata?.planId).find(Boolean),
+      prices,
+    }),
+    periodEnd: periodEnds.length
+      ? new Date(Math.max(...periodEnds) * 1000)
+      : toDate(invoice?.period_end),
+    billingReason: String(invoice?.billing_reason || ""),
+  };
+}
+
+/**
+ * `invoice.paid` keeps the subscription active and re-syncs the plan;
+ * `invoice.payment_failed` marks it past_due so access can pause. An unknown
+ * plan never clears one — it just keeps whatever the account already has.
+ */
+export async function syncInvoice({ invoice, status } = {}) {
+  const details = invoiceDetails(invoice);
+  /* An invoice without a subscription is a one-off (the retired credit pack).
+     It must never touch subscription state, even though it has a customer. */
+  if (!details.subscriptionId) {
+    return { updated: false, plan: null, status: "", reason: "no_subscription" };
+  }
+
+  const nextStatus = String(status || "active");
+  const rows = await writeSubscriptionState({
+    subscriptionId: details.subscriptionId,
+    customerId: details.customerId,
+    plan: details.plan,
+    status: nextStatus,
+    endsAt: details.periodEnd,
+  });
+
+  return {
+    updated: rows.length > 0,
+    plan: rows[0]?.plan ?? details.plan,
+    status: nextStatus,
+    billingReason: details.billingReason,
+  };
+}
+
+/** The customer id Stripe knows this account by, if there is one. */
+export async function stripeCustomerId(userId) {
+  if (!userId) return "";
+  await ensureSchema();
+  const { rows } = await query("select stripe_customer_id from app_users where id = $1", [userId]);
+  return String(rows[0]?.stripe_customer_id || "").trim();
+}
+
+/** Remember the customer id so the billing portal can be opened later. */
+export async function rememberCustomer(userId, customerId) {
+  const id = String(customerId || "").trim();
+  if (!userId || !id) return false;
+  await ensureSchema();
+  await query("update app_users set stripe_customer_id = $2 where id = $1", [userId, id]);
+  return true;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Legacy one-off credits                                                   */
+/* -------------------------------------------------------------------------- */
 
 /**
  * Add one-off credits to an account, at most once per Stripe session.

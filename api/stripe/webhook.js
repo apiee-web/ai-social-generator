@@ -1,20 +1,29 @@
 /**
  * api/stripe/webhook.js — POST /api/stripe/webhook
  * ---------------------------------------------------------------------------
- * Stripe calls this when a subscription starts, renews or ends. The account is
- * also upgraded by /api/stripe/return, so whichever arrives first wins and the
- * other is a no-op (every write here is idempotent).
+ * Stripe calls this when a subscription starts, renews, fails or ends. The
+ * account is also upgraded by /api/stripe/return, so whichever arrives first
+ * wins and the other is a no-op (every write here is idempotent).
  *
  * Set this URL in Stripe → Developers → Webhooks:
  *   https://your-site.vercel.app/api/stripe/webhook
- * Events: checkout.session.completed, checkout.session.async_payment_succeeded,
- *         customer.subscription.updated, customer.subscription.deleted
+ * Events:
+ *   checkout.session.completed
+ *   checkout.session.async_payment_succeeded
+ *   customer.subscription.created / .updated / .deleted
+ *   invoice.paid
+ *   invoice.payment_failed
  * The endpoint's "Signing secret" (whsec_…) must be exactly the value of
- * STRIPE_WEBHOOK_SECRET, or every delivery is rejected as unsigned.
+ * STRIPE_WEBHOOK_SECRET, or every delivery is rejected as unsigned. Test and
+ * live mode have separate endpoints and separate secrets.
+ *
+ * Plan resolution lives in _lib/credits.js: metadata first, then the Stripe
+ * Price. An event that names no recognisable plan keeps the account's current
+ * plan, so a thin payload can never downgrade a paying customer.
  * ---------------------------------------------------------------------------
  */
 
-import { applyCheckoutSession, isPaid, syncSubscription } from "../_lib/credits.js";
+import { applyCheckoutSession, isPaid, syncInvoice, syncSubscription } from "../_lib/credits.js";
 import { fail, noStore, readRawBody, send } from "../_lib/http.js";
 import { getStripe, stripeWebhookSecret } from "../_lib/stripe.js";
 
@@ -27,6 +36,12 @@ const SUBSCRIPTION_EVENTS = new Set([
   "customer.subscription.created",
   "customer.subscription.updated",
   "customer.subscription.deleted",
+]);
+
+/* Invoice events are what a renewal and a failed card actually look like. */
+const INVOICE_EVENTS = new Map([
+  ["invoice.paid", "active"],
+  ["invoice.payment_failed", "past_due"],
 ]);
 
 export default async function handler(req, res) {
@@ -61,17 +76,29 @@ export default async function handler(req, res) {
       return send(res, 400, { error: "Invalid Stripe signature." });
     }
 
-    /* ---- Subscription lifecycle (renewals, cancellations, failures) ------ */
+    /* ---- Subscription lifecycle (created, switched, cancelled) ----------- */
     if (SUBSCRIPTION_EVENTS.has(event.type)) {
-      const subscription = event.data?.object || {};
-      const result = await syncSubscription({
-        subscriptionId: String(subscription.id || ""),
-        customerId: String(subscription.customer || ""),
-        planId: String(subscription.metadata?.planId || ""),
-        status: String(subscription.status || ""),
-        periodEnd: subscription.current_period_end,
+      const result = await syncSubscription({ subscription: event.data?.object || {} });
+      console.log(
+        `[stripe] ${event.type} → plan=${result.plan ?? "unchanged"} status=${result.status} updated=${result.updated}`,
+      );
+      return send(res, 200, { received: true, ...result });
+    }
+
+    /* ---- Renewals and failed payments ----------------------------------- */
+    if (INVOICE_EVENTS.has(event.type)) {
+      const invoice = event.data?.object || {};
+      const result = await syncInvoice({
+        invoice,
+        status: INVOICE_EVENTS.get(event.type),
       });
-      console.log(`[stripe] ${event.type} → plan=${result.plan} status=${result.status}`);
+      if (!result.updated && result.reason === "no_subscription") {
+        /* A one-off invoice (the retired credit pack) — nothing to sync. */
+        return send(res, 200, { received: true, ignored: "no_subscription" });
+      }
+      console.log(
+        `[stripe] ${event.type} → plan=${result.plan ?? "unchanged"} status=${result.status} updated=${result.updated}`,
+      );
       return send(res, 200, { received: true, ...result });
     }
 
