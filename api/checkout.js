@@ -89,15 +89,6 @@ export default async function handler(req, res) {
       });
     }
 
-    const priceId = priceIdFor(plan.id);
-    if (!priceId) {
-      return send(res, 503, {
-        error: `Checkout for the ${plan.name} plan isn't configured yet. Add ${priceEnvName(plan.id)} — a Stripe Price ID starting with price_ — to your environment variables, then redeploy.`,
-        code: "stripe_price_missing",
-        env: priceEnvName(plan.id),
-      });
-    }
-
     const user = await currentUser(req);
     if (!user) {
       return send(res, 401, {
@@ -117,6 +108,17 @@ export default async function handler(req, res) {
             : "You already have an active subscription. Use Manage billing to switch plans — that avoids a second charge.",
         code: "already_subscribed",
         plan: user.plan || null,
+      });
+    }
+
+    /* Configuration comes after sign-in, so a customer never sees an operator
+       message about environment variables. */
+    const priceId = priceIdFor(plan.id);
+    if (!priceId) {
+      return send(res, 503, {
+        error: `Checkout for the ${plan.name} plan isn't configured yet. Add ${priceEnvName(plan.id)} — a Stripe Price ID starting with price_ — to your environment variables, then redeploy.`,
+        code: "stripe_price_missing",
+        env: priceEnvName(plan.id),
       });
     }
 
