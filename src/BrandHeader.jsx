@@ -15,9 +15,11 @@ export default function BrandHeader({
   plan,
   user,
   accountsOn,
+  billingBusy,
   onBuy,
   onSignIn,
   onSignOut,
+  onManageBilling,
 }) {
   const planLabel = unlimited ? `${plan ? plan[0].toUpperCase() + plan.slice(1) : "Paid"} plan` : null;
   const verified = user ? user.emailVerified !== false : false;
@@ -61,6 +63,17 @@ export default function BrandHeader({
         <button type="button" className="aisg-btn aisg-btn-outline" onClick={onBuy}>
           {unlimited ? "Plans" : "Upgrade"}
         </button>
+        {unlimited && user && (
+          <button
+            type="button"
+            className="aisg-btn aisg-btn-outline aisg-manage"
+            onClick={onManageBilling}
+            disabled={Boolean(billingBusy)}
+            title="Update your card, switch plans or cancel"
+          >
+            {billingBusy ? "Opening…" : "Manage billing"}
+          </button>
+        )}
         {accountsOn &&
           (user ? (
             <div className="aisg-user">

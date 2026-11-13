@@ -8,9 +8,20 @@
 
 import { useEffect } from "react";
 
-import { PLANS } from "./studio-config.js";
+import { BILLING_NOTE, PLANS } from "./studio-config.js";
 
-export default function PricingModal({ open, purchasing, error, cloud, signedIn, plan, onClose, onSelect }) {
+export default function PricingModal({
+  open,
+  purchasing,
+  billingBusy,
+  error,
+  cloud,
+  signedIn,
+  plan,
+  onClose,
+  onSelect,
+  onManageBilling,
+}) {
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event) => {
@@ -72,11 +83,13 @@ export default function PricingModal({ open, purchasing, error, cloud, signedIn,
                 <button
                   type="button"
                   className="aisg-btn aisg-btn-primary aisg-btn-full"
-                  onClick={() => onSelect(option)}
-                  disabled={Boolean(purchasing) || current}
+                  onClick={() => (current ? onManageBilling?.() : onSelect(option))}
+                  disabled={Boolean(purchasing) || (current && Boolean(billingBusy))}
                 >
                   {current
-                    ? "Your current plan"
+                    ? billingBusy
+                      ? "Opening billing…"
+                      : "Manage billing"
                     : purchasing === option.id
                       ? "Opening checkout…"
                       : cloud && !signedIn
@@ -96,7 +109,7 @@ export default function PricingModal({ open, purchasing, error, cloud, signedIn,
 
         <p className="aisg-fineprint">
           {cloud && signedIn
-            ? "Secure recurring payment by Stripe. Cancel any time from the Stripe receipt — access lasts to the end of the paid month."
+            ? `Secure recurring payment by Stripe. ${BILLING_NOTE}`
             : cloud
               ? "Sign in first — your plan and Brand Vault follow your email to any device."
               : "Demo mode: no card is charged until accounts and Stripe are connected."}

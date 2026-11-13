@@ -11,6 +11,7 @@ export const CREDIT_COST = 1; // free credits charged per full 3-channel generat
 export const CREDITS_KEY = "aisg:credits:v1"; // localStorage key for the guest balance
 export const RESULTS_KEY = "omni:results:v1"; // localStorage key for past generations
 export const MAX_RESULTS = 8; // how many past generations to keep
+export const BILLING_NOTE = "Manage or cancel anytime from your account.";
 
 export const TONES = [
   { id: "friendly", label: "Friendly" },
@@ -42,6 +43,7 @@ export const PLANS = [
       "LinkedIn, Instagram and TikTok in one click",
       "1 Brand Vault profile",
       "Anti-cliché voice guard",
+      "Manage or cancel anytime",
     ],
   },
   {
@@ -56,6 +58,7 @@ export const PLANS = [
       "Everything in Creator",
       "Up to 5 Brand Vault profiles",
       "Switch brands per generation",
+      "Manage or cancel anytime",
     ],
   },
 ];
