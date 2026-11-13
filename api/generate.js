@@ -8,7 +8,9 @@
  *
  * The language of the idea decides the language of the whole answer: the model
  * reports `detected_language` first and every field must follow it exactly,
- * even when the Voice DNA was measured from posts in another language.
+ * even when the Brand Vault or its Voice DNA were written in another language.
+ * The idea is also scanned locally, so the prompt can name the language instead
+ * of leaving the model to infer it from Dutch brand fields.
  *
  * The AI key lives in the Vercel project's Environment Variables, so the
  * browser bundle never sees it. Any OpenAI-compatible provider works — switch
@@ -108,9 +110,45 @@ function aiConfig() {
 /*  Prompt                                                                   */
 /* -------------------------------------------------------------------------- */
 
+/* A cheap, deterministic read on the idea's language. The model is still the
+   one that decides what detected_language says, but naming the language up
+   front stops a Dutch brand profile from dragging an English brief into Dutch. */
+const DUTCH_WORDS = new Set([
+  "de", "het", "een", "en", "van", "dat", "die", "in", "is", "op", "te", "je", "jij", "niet",
+  "met", "voor", "onze", "ons", "ook", "maar", "als", "dan", "bij", "nog", "wordt", "heeft",
+  "zijn", "kunnen", "mijn", "wij", "ik", "dit", "deze", "wat", "hoe", "waarom", "naar", "tot",
+  "uit", "over", "er", "om", "aan", "ze", "hun", "wel", "geen", "meer", "altijd", "elke",
+]);
+const ENGLISH_WORDS = new Set([
+  "the", "and", "a", "of", "to", "in", "is", "it", "you", "that", "this", "with", "for",
+  "on", "your", "our", "we", "not", "but", "as", "at", "be", "have", "from", "by", "or",
+  "they", "their", "what", "how", "why", "was", "are", "keep", "keeps", "until", "when",
+  "every", "still", "just", "more", "than", "about", "can", "will", "does",
+]);
+
+export function guessLanguage(text) {
+  const words = String(text || "").toLowerCase().match(/[a-zà-ÿ']+/g) || [];
+  if (words.length < 4) return "";
+
+  let dutch = 0;
+  let english = 0;
+  for (const word of words) {
+    if (DUTCH_WORDS.has(word)) dutch += 1;
+    if (ENGLISH_WORDS.has(word)) english += 1;
+  }
+
+  /* Clear-cut case first: stop words in one language and none in the other. */
+  if (dutch > 0 && english === 0) return "Dutch";
+  if (english > 0 && dutch === 0) return "English";
+  if (dutch >= 2 && dutch > english * 1.4) return "Dutch";
+  if (english >= 2 && english > dutch * 1.4) return "English";
+  return "";
+}
+
 function buildPrompt({ topic, tone, brand }) {
   const toneText = TONES[tone] || TONES.friendly;
   const truthy = (value) => Boolean(value && String(value).trim());
+  const languageHint = guessLanguage(topic);
 
   const context = truthy(brand)
     ? [
@@ -138,11 +176,12 @@ function buildPrompt({ topic, tone, brand }) {
     "",
     "STEP 1 — LANGUAGE: read the IDEA and detect the language it is written in. Dutch input means every word of the answer is Dutch. English input means every word is English. Any other language: answer fully in that language. Never mix — a single sentence in another language is a failure.",
     "",
-    "BRAND CONTEXT — fixed, never contradict it:",
+    "BRAND CONTEXT — fixed, never contradict it. It is content, not a language signal: these fields are often written in a different language than the idea, and that never changes the answer's language:",
     ...context.map((line) => `- ${line}`),
     ...voiceDna,
     "",
     `IDEA: ${topic}`,
+    `Language signal: the IDEA is written in ${languageHint || "the language you detect"} — the whole answer is written in that language.`,
     `Default tone: ${toneText}`,
     "",
     "Answer with exactly this JSON object and nothing else:",
@@ -154,7 +193,7 @@ function buildPrompt({ topic, tone, brand }) {
     "INSTAGRAM / FACEBOOK: a scroll-stopping first line and one clear call to action. Paragraphs of at most two sentences each, separated by a blank line (\\n\\n). Exactly 5-7 relevant hashtags in the hashtags array, never inside the text. Under 2,000 characters, at most one emoji.",
     "TIKTOK / REELS: \"hook\" is the first three seconds, at most 12 words — the spoken line only, no camera or visual direction. \"script\" is the spoken script, at most 350 characters, with natural beats and a closing line. No hashtags, no emojis, no stage or camera directions, no text in brackets.",
     "Every field — linkedin.text, instagram.text, tiktok.hook and tiktok.script — is written 100% in detected_language.",
-    "FINAL CHECK before answering: detected_language is the language of the IDEA, answered in that language only. Never let the BRAND CONTEXT, the VOICE DNA or its quoted examples change it; when those are in another language, carry over the rhythm and vocabulary habits, translated into detected_language.",
+    `FINAL CHECK before answering: detected_language is the language of the IDEA (${languageHint || "whatever language the IDEA is written in"}), and every field is written in it. The BRAND CONTEXT, the VOICE DNA and any quoted examples are content only — when they are in another language, translate their rhythm and vocabulary habits into detected_language rather than switching to their language.`,
     "",
     "VOICE RULES — strict:",
     "- Sound like one specific human with first-hand knowledge: concrete details, plain words, sentences of different lengths.",
@@ -463,6 +502,7 @@ async function handler(req, res) {
     return send(res, 200, {
       channels,
       detectedLanguage: channels.detectedLanguage || null,
+      languageHint: guessLanguage(topic) || null,
       brand: brand
         ? {
             id: brand.id,
