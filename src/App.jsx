@@ -3,6 +3,8 @@
  * ---------------------------------------------------------------------------
  * One screen that:
  *   • keeps a Brand Vault per account (/api/brand) and writes with it
+ *   • turns pasted posts into Voice DNA, the style fingerprint every
+ *     generation then imitates (/api/analyze-voice)
  *   • turns one idea into LinkedIn, Instagram/Facebook and TikTok at once
  *     (/api/generate), with the anti-cliché voice rules applied server-side
  *   • shows accounts, plan status and usage from /api/auth/me
@@ -93,6 +95,7 @@ export default function App({ apiBase = "" }) {
   const [brandId, setBrandId] = useState("");
   const [vaultLimit, setVaultLimit] = useState(1);
   const [vaultSaving, setVaultSaving] = useState(false);
+  const [voiceAnalyzing, setVoiceAnalyzing] = useState(false);
   const [vaultError, setVaultError] = useState(null);
 
   const copyTimer = useRef(null);
@@ -350,6 +353,7 @@ export default function App({ apiBase = "" }) {
         toneLabel: TONE_MAP[tone]?.label || "",
         brandName: data.brand?.name || null,
         language: data.detectedLanguage || data.channels?.detectedLanguage || null,
+        voiceDna: Boolean(data.brand?.voiceDna),
         channels: {
           linkedin: { text: String(data.channels.linkedin?.text || "").trim() },
           instagram: {
@@ -458,12 +462,57 @@ export default function App({ apiBase = "" }) {
       if (typeof data.limit === "number") setVaultLimit(data.limit);
       if (data.vault?.id) setBrandId(data.vault.id);
       flash(`Brand saved — "${data.vault?.name}" is now in every generation.`);
-      return true;
+      return data.vault || true;
     } catch (err) {
       setVaultError(String(err?.message || err));
       return false;
     } finally {
       setVaultSaving(false);
+    }
+  }
+
+  /* Voice DNA: analyse the pasted posts, save the fingerprint, keep the panel
+     in sync. A brand that was never saved is saved first, so the analysis
+     always has a row to write to. */
+  async function handleAnalyzeVoice(draft) {
+    if (voiceAnalyzing) return false;
+
+    const examples = String(draft?.examplePosts || "").trim();
+    if (examples.length < 80) {
+      setVaultError("Paste a bit more — two or three real posts give us enough to work with.");
+      return false;
+    }
+
+    setVoiceAnalyzing(true);
+    setVaultError(null);
+    try {
+      let vaultId = String(draft.id || "").trim();
+      if (!vaultId) {
+        const saved = await handleSaveBrand(draft);
+        if (!saved || typeof saved !== "object" || !saved.id) return false;
+        vaultId = saved.id;
+      }
+
+      const response = await fetch(`${base}/api/analyze-voice`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vaultId, examplePosts: examples }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Couldn't analyse that (${response.status}).`);
+
+      if (data.vault) {
+        setVaults((current) => [data.vault, ...current.filter((vault) => vault.id !== data.vault.id)]);
+        setBrandId(data.vault.id);
+      }
+      flash("Voice DNA saved — every generation now writes in your style.");
+      return data.vault || true;
+    } catch (err) {
+      setVaultError(String(err?.message || err));
+      return false;
+    } finally {
+      setVoiceAnalyzing(false);
     }
   }
 
@@ -638,11 +687,13 @@ export default function App({ apiBase = "" }) {
             limit={vaultLimit}
             selectedId={brandId}
             unlimited={unlimited}
-            saving={vaultSaving}
             error={vaultError}
             onSelect={setBrandId}
             onSave={handleSaveBrand}
             onDelete={handleDeleteBrand}
+            onAnalyze={handleAnalyzeVoice}
+            saving={vaultSaving}
+            analyzing={voiceAnalyzing}
           />
         )}
 
