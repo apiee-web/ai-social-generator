@@ -67,6 +67,7 @@ export const OMNI_CSS = `
 }
 .aisg-voice-note { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
 
+.aisg-manage { white-space: nowrap; }
 .aisg-vault { margin-bottom: 18px; }
 .aisg-vault-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .aisg-vault-title { font-size: 15px; letter-spacing: -0.01em; }
