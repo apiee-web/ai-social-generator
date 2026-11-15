@@ -11,7 +11,9 @@
 
 export const LANDING_CSS = `
 .aig { padding: 0; }
+.aig *, .aig *::before, .aig *::after { box-sizing: border-box; }
 .aig-shell { width: 100%; max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+.aig-hero-grid > * { min-width: 0; }
 .aig section { scroll-margin-top: 84px; }
 .aig a { color: inherit; }
 
@@ -164,7 +166,7 @@ export const LANDING_CSS = `
 .aig-plan ul { list-style: none; padding: 0; margin: 16px 0 18px; display: grid; gap: 8px; }
 .aig-plan li { position: relative; padding-left: 20px; font-size: 13px; line-height: 1.5; color: #3b4064; }
 .aig-plan li::before {
-  content: "\\u2713"; position: absolute; left: 0; top: 0;
+  content: "✓"; position: absolute; left: 0; top: 0;
   color: var(--ok); font-weight: 800; font-size: 12px;
 }
 .aig-plan .aisg-btn { margin-top: auto; }
