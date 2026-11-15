@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from "react";
 
+import { CSS } from "./styles.js";
 import { LANDING_CSS } from "./styles-landing.js";
 import { PLANS } from "./studio-config.js";
 
@@ -254,6 +255,10 @@ export default function LandingPage({ onStart, onLogin }) {
 
   return (
     <div className="aisg aig">
+      {/* The base sheet carries the tokens, buttons and modal styles, so the
+          landing page has to bring it along — the app only injects it on the
+          signed-in screen. */}
+      <style>{CSS}</style>
       <style>{LANDING_CSS}</style>
 
       <header className="aig-nav">
