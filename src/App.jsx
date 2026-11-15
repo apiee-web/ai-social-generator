@@ -12,6 +12,8 @@
  *     resends the email or takes the six-digit code (/api/auth/verify)
  *   • opens a subscription pricing modal (Creator €19 / Agency €49) whose
  *     buttons start a real monthly Stripe Checkout session
+ *   • shows the public landing page to visitors who aren't signed in, and the
+ *     studio itself to accounts
  *   • still works in guest mode (credits in localStorage) when the backend has
  *     no database configured
  *
@@ -27,6 +29,7 @@ import AuthModal from "./AuthModal.jsx";
 import BrandHeader from "./BrandHeader.jsx";
 import BrandVaultPanel from "./BrandVaultPanel.jsx";
 import GeneratorForm from "./GeneratorForm.jsx";
+import LandingPage from "./LandingPage.jsx";
 import PricingModal from "./PricingModal.jsx";
 import ResultsSection from "./ResultsSection.jsx";
 import VerifyBanner from "./VerifyBanner.jsx";
@@ -58,6 +61,7 @@ export default function App({ apiBase = "" }) {
   const [sessionReady, setSessionReady] = useState(false);
   const [user, setUser] = useState(null);
   const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState("signin");
 
   const [guestCredits, setGuestCredits] = useState(() => {
     const stored = Number(readStorage(CREDITS_KEY, FREE_CREDITS));
@@ -112,10 +116,22 @@ export default function App({ apiBase = "" }) {
   const verified = !user || user.emailVerified !== false;
   const outOfCredits = !unlimited && !needsSignIn && credits < CREDIT_COST;
 
+  /* Accounts are configured but nobody is signed in yet: this visitor gets the
+     landing page instead of the studio. Guest mode (no database) still shows
+     the app, which is how it runs before accounts are switched on. */
+  const showLanding = sessionReady && accountsEnabled && !user;
+
   function flash(message) {
     setNotice(message);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
     noticeTimer.current = setTimeout(() => setNotice(null), 6000);
+  }
+
+  /* One entry point for "open the account modal", so the landing page can ask
+     for signup while every in-app prompt asks for signin. */
+  function openAuth(mode = "signin") {
+    setAuthMode(mode === "signup" ? "signup" : "signin");
+    setAuthOpen(true);
   }
 
   const refreshSession = useCallback(async () => {
@@ -289,7 +305,7 @@ export default function App({ apiBase = "" }) {
     /* Signed-out visitors get the login modal instead of a failed request. */
     if (cloud && !user) {
       setError(null);
-      setAuthOpen(true);
+      openAuth();
       return;
     }
 
@@ -331,7 +347,7 @@ export default function App({ apiBase = "" }) {
       const data = await response.json().catch(() => ({}));
 
       if (response.status === 401) {
-        setAuthOpen(true);
+        openAuth();
         return;
       }
       if (response.status === 402) {
@@ -552,7 +568,7 @@ export default function App({ apiBase = "" }) {
     /* No account yet? Sign in first, then come back to the plan. */
     if (cloud && !user) {
       setPricingOpen(false);
-      setAuthOpen(true);
+      openAuth();
       return;
     }
 
@@ -575,7 +591,7 @@ export default function App({ apiBase = "" }) {
       }
       if (response.status === 401) {
         setPricingOpen(false);
-        setAuthOpen(true);
+        openAuth();
         return;
       }
       if (response.ok && data.demo) {
@@ -607,7 +623,7 @@ export default function App({ apiBase = "" }) {
       const data = await response.json().catch(() => ({}));
 
       if (response.status === 401) {
-        setAuthOpen(true);
+        openAuth();
         return;
       }
       if (response.ok && data.url) {
@@ -641,7 +657,7 @@ export default function App({ apiBase = "" }) {
     setVerifyNote(null);
     setVerifyError(null);
     setVerifyLink(null);
-    setAuthOpen(true); // straight back to the sign-in screen
+    openAuth(); // straight back to the sign-in screen
     flash("You're logged out. Your plan and Brand Vault are safe on your account.");
     refreshSession();
   }
@@ -682,6 +698,24 @@ export default function App({ apiBase = "" }) {
 
   const creditWord = credits === 1 ? "free test credit left" : "free test credits left";
 
+  /* Signed out: the public page, plus the same account modal the app uses. No
+     ads or guest generator in the way — the only action is creating an
+     account, and the moment one exists the studio replaces this. */
+  if (showLanding) {
+    return (
+      <>
+        <LandingPage onStart={() => openAuth("signup")} onLogin={() => openAuth()} />
+        <AuthModal
+          open={authOpen}
+          base={base}
+          mode={authMode}
+          onClose={() => setAuthOpen(false)}
+          onAuthed={handleAuthed}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="aisg">
       <style>{CSS}</style>
@@ -700,7 +734,7 @@ export default function App({ apiBase = "" }) {
             setPricingError(null);
             setPricingOpen(true);
           }}
-          onSignIn={() => setAuthOpen(true)}
+          onSignIn={() => openAuth()}
           onSignOut={handleSignOut}
           billingBusy={billingBusy}
           onManageBilling={handleManageBilling}
@@ -800,6 +834,7 @@ export default function App({ apiBase = "" }) {
       <AuthModal
         open={authOpen}
         base={base}
+        mode={authMode}
         onClose={() => setAuthOpen(false)}
         onAuthed={handleAuthed}
       />
