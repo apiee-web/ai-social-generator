@@ -13,7 +13,7 @@
 
 import { useEffect, useState } from "react";
 
-export default function AuthModal({ open, base, onClose, onAuthed }) {
+export default function AuthModal({ open, base, mode: requestedMode = "signin", onClose, onAuthed }) {
   const [mode, setMode] = useState("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -37,6 +37,14 @@ export default function AuthModal({ open, base, onClose, onAuthed }) {
   useEffect(() => {
     if (open) setError(null);
   }, [open]);
+
+  /* The landing page opens this modal in signup or signin mode; the in-app
+     "Sign in" path leaves it on signin. */
+  useEffect(() => {
+    if (open && (requestedMode === "signup" || requestedMode === "signin")) {
+      setMode(requestedMode);
+    }
+  }, [open, requestedMode]);
 
   if (!open) return null;
 
