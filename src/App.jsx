@@ -698,6 +698,18 @@ export default function App({ apiBase = "" }) {
 
   const creditWord = credits === 1 ? "free test credit left" : "free test credits left";
 
+  /* Until /api/auth/me answers we can't tell a returning account from a new
+     visitor. Rendering the studio in that gap would flash the generator at
+     somebody who has never signed up, so hold a blank canvas for that beat. */
+  if (!sessionReady) {
+    return (
+      <div className="aisg" style={{ display: "grid", placeItems: "center", minHeight: "100vh", padding: 0 }}>
+        <style>{CSS}</style>
+        <span className="aisg-spinner" aria-hidden="true" />
+      </div>
+    );
+  }
+
   /* Signed out: the public page, plus the same account modal the app uses. No
      ads or guest generator in the way — the only action is creating an
      account, and the moment one exists the studio replaces this. */
