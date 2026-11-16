@@ -199,8 +199,19 @@ export const LANDING_CSS = `
   .aig-steps, .aig-why, .aig-plans { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
-  .aig-nav-inner { min-height: 62px; gap: 12px; }
-  .aig-nav-actions .aisg-btn { padding: 9px 12px; font-size: 12.5px; }
+  /* Brand on its own line, both buttons on the next one: side by side they
+     squeezed "Log in" and "Start Free (5 Credits)" into stacked words. */
+  .aig-nav-inner {
+    min-height: 0; padding-top: 10px; padding-bottom: 10px;
+    flex-wrap: wrap; gap: 10px;
+  }
+  .aig-nav-mark { width: 30px; height: 30px; border-radius: 9px; }
+  .aig-nav-mark svg { width: 19px; height: 19px; }
+  .aig-nav-actions { width: 100%; margin-left: 0; gap: 8px; }
+  .aig-nav-actions .aisg-btn {
+    flex: 1 1 0; min-width: 0; padding: 10px 10px;
+    font-size: 12px; white-space: nowrap; justify-content: center;
+  }
   .aig-cta-row { align-items: stretch; }
   .aig-cta { width: 100%; justify-content: center; text-align: center; }
   .aig-foot-inner { flex-direction: column; }
