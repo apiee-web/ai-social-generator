@@ -11,7 +11,9 @@
 }
 
 body {
-  min-width: 320px;
+  /* 300 rather than 320: on a 320px screen with a classic scrollbar only ~305px
+     is usable, and a 320px floor pushed the whole page sideways by 15px. */
+  min-width: 300px;
   min-height: 100vh;
   margin: 0;
 }
