@@ -207,9 +207,11 @@ export const LANDING_CSS = `
   }
   .aig-nav-mark { width: 30px; height: 30px; border-radius: 9px; }
   .aig-nav-mark svg { width: 19px; height: 19px; }
-  .aig-nav-actions { width: 100%; margin-left: 0; gap: 8px; }
+  /* Side by side while they fit (from ~360px up), stacked on a 320px phone
+     rather than letting them push the page wider than the screen. */
+  .aig-nav-actions { width: 100%; margin-left: 0; gap: 8px; flex-wrap: wrap; }
   .aig-nav-actions .aisg-btn {
-    flex: 1 1 0; min-width: 0; padding: 10px 10px;
+    flex: 1 1 140px; min-width: 0; padding: 10px 10px;
     font-size: 12px; white-space: nowrap; justify-content: center;
   }
   .aig-cta-row { align-items: stretch; }
