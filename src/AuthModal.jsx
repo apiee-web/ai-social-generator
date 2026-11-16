@@ -72,9 +72,12 @@ export default function AuthModal({ open, base, mode: requestedMode = "signin", 
     setError(null);
 
     try {
+      /* Relative on purpose: it must hit whichever host the visitor is on
+         (getomnicontext.com redirects to www), or the POST becomes
+         cross-origin and dies as "Failed to fetch". */
       const response = await fetch(`${base}/api/auth/${signingUp ? "signup" : "login"}`, {
         method: "POST",
-        credentials: "same-origin",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: cleanEmail, password }),
       });

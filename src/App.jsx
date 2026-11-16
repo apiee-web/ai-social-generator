@@ -94,6 +94,9 @@ export default function App({ apiBase = "" }) {
   const [verifyNote, setVerifyNote] = useState(null);
   const [verifyError, setVerifyError] = useState(null);
   const [verifyLink, setVerifyLink] = useState(null);
+  /* Something the signed-out landing page has to explain, e.g. a verification
+     link that expired or was already used. */
+  const [authNotice, setAuthNotice] = useState(null);
 
   /* Brand Vault */
   const [vaults, setVaults] = useState([]);
@@ -131,13 +134,40 @@ export default function App({ apiBase = "" }) {
      for signup while every in-app prompt asks for signin. */
   function openAuth(mode = "signin") {
     setAuthMode(mode === "signup" ? "signup" : "signin");
+    setAuthNotice(null);
     setAuthOpen(true);
   }
+
+  /* Every /api/auth call goes out on the host the page is being served from.
+     A relative URL is deliberate: an absolute one (an old vercel.app address,
+     or the bare domain while the site actually serves from www) turns the POST
+     into a cross-origin request, which the browser kills with "Failed to
+     fetch". One quiet retry covers a cold function or a dropped connection. */
+  const postAuth = useCallback(
+    async (action, payload) => {
+      let lastError = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          return await fetch(`${base}/api/auth/${action}`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload || {}),
+          });
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolve) => setTimeout(resolve, 700));
+        }
+      }
+      throw lastError;
+    },
+    [base]
+  );
 
   const refreshSession = useCallback(async () => {
     try {
       const response = await fetch(`${base}/api/auth/me`, {
-        credentials: "same-origin",
+        credentials: "include",
         headers: { Accept: "application/json" },
       });
 
@@ -226,23 +256,27 @@ export default function App({ apiBase = "" }) {
           }, 1500);
         }
 
+        let tokenOk = false;
         if (token) {
-          const response = await fetch(`${base}/api/auth/verify`, {
-            method: "POST",
-            credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token }),
-          });
+          const response = await postAuth("verify", { token });
           const data = await response.json().catch(() => ({}));
           if (response.ok) {
+            tokenOk = true;
             if (alive && data.user) setUser(data.user);
+            setAuthNotice(null);
             flash("Email confirmed — your free test credits are unlocked.");
           } else {
-            setVerifyError(String(data.error || "That link didn't work. Use the code below."));
+            /* Signed out there is no banner on screen, so the reason has to
+               come from somewhere the visitor can see it. */
+            const message = String(
+              data.error || "That verification link didn't work. Sign in and ask for a new one."
+            );
+            setVerifyError(message);
+            setAuthNotice(message);
           }
         }
 
-        if (state || token || billing) {
+        if (state || billing || (token && tokenOk)) {
           params.delete("checkout");
           params.delete("session_id");
           params.delete("verify");
@@ -262,7 +296,7 @@ export default function App({ apiBase = "" }) {
     return () => {
       alive = false;
     };
-  }, [base, refreshSession]);
+  }, [base, postAuth, refreshSession]);
 
   useEffect(() => {
     loadVaults();
@@ -420,21 +454,23 @@ export default function App({ apiBase = "" }) {
     setVerifyError(null);
     setVerifyNote(null);
     try {
-      const response = await fetch(`${base}/api/auth/verify`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: user.email, code: verifyCode }),
-      });
+      const response = await postAuth("verify", { email: user.email, code: verifyCode });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `Couldn't verify that (${response.status}).`);
 
       if (data.user) setUser(data.user);
       setVerifyCode("");
       setVerifyLink(null);
+      setAuthNotice(null);
       flash("Email confirmed — your free test credits are unlocked.");
     } catch (err) {
-      setVerifyError(String(err?.message || err));
+      /* Raw "Failed to fetch" tells nobody anything, and the code is still
+         valid — so say so and let them press the button again. */
+      setVerifyError(
+        err instanceof TypeError
+          ? "Couldn't reach the server. Check your connection and press Verify code again — the code still works."
+          : String(err?.message || err)
+      );
     } finally {
       setVerifyBusy(false);
     }
@@ -716,6 +752,13 @@ export default function App({ apiBase = "" }) {
   if (showLanding) {
     return (
       <>
+        {authNotice && (
+          <div className="aisg" style={{ padding: "14px 20px 0" }}>
+            <div className="aisg-notice" role="status">
+              {authNotice}
+            </div>
+          </div>
+        )}
         <LandingPage onStart={() => openAuth("signup")} onLogin={() => openAuth()} />
         <AuthModal
           open={authOpen}
