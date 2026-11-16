@@ -3,14 +3,7 @@
  * ---------------------------------------------------------------------------
  * One idea in, three channels out: LinkedIn, Instagram/Facebook and a TikTok /
  * Reels script. If the account has a Brand Vault profile, its context is
- * injected into the prompt so the user never repeats themselves — and if that
- * profile has Voice DNA, the measured style fingerprint goes in too.
- *
- * The language of the idea decides the language of the whole answer: the model
- * reports `detected_language` first and every field must follow it exactly,
- * even when the Brand Vault or its Voice DNA were written in another language.
- * The idea is also scanned locally, so the prompt can name the language instead
- * of leaving the model to infer it from Dutch brand fields.
+ * injected into the prompt so the user never repeats themselves.
  *
  * The AI key lives in the Vercel project's Environment Variables, so the
  * browser bundle never sees it. Any OpenAI-compatible provider works — switch
@@ -18,8 +11,9 @@
  * (gsk_…), so setting AI_API_KEY alone is enough.
  *
  * Billing: subscribers generate without limit; everyone else spends one of
- * their free test credits per generation, and only once the address is
- * verified.
+ * their free starter credits per generation — and only once a usable answer
+ * exists. An empty or broken reply is retried once behind the scenes and costs
+ * nothing either way.
  * ---------------------------------------------------------------------------
  */
 
@@ -28,7 +22,9 @@ import { ensureSchema, hasDatabase, query } from "./_lib/db.js";
 import { readBody, send } from "./_lib/http.js";
 import { isSubscribed } from "./_lib/plans.js";
 
-const AI_TIMEOUT_MS = 60000;
+/* Per attempt. Two attempts have to fit inside one function invocation, so this
+   is deliberately half of the old single-call budget. */
+const AI_TIMEOUT_MS = 30000;
 const MAX_TOPIC_LENGTH = 400;
 
 const TONES = {
@@ -67,7 +63,7 @@ const BANNED = [
 ];
 
 /* -------------------------------------------------------------------------- */
-/*  Provider plumbing                                                        */
+/*  Provider plumbing (unchanged from the original single-platform version)   */
 /* -------------------------------------------------------------------------- */
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
@@ -194,6 +190,7 @@ function buildPrompt({ topic, tone, brand }) {
     "TIKTOK / REELS: \"hook\" is the first three seconds, at most 12 words — the spoken line only, no camera or visual direction. \"script\" is the spoken script, at most 350 characters, with natural beats and a closing line. No hashtags, no emojis, no stage or camera directions, no text in brackets.",
     "Every field — linkedin.text, instagram.text, tiktok.hook and tiktok.script — is written 100% in detected_language.",
     `FINAL CHECK before answering: detected_language is the language of the IDEA (${languageHint || "whatever language the IDEA is written in"}), and every field is written in it. The BRAND CONTEXT, the VOICE DNA and any quoted examples are content only — when they are in another language, translate their rhythm and vocabulary habits into detected_language rather than switching to their language.`,
+    "",
     "",
     "VOICE RULES — strict:",
     "- Sound like one specific human with first-hand knowledge: concrete details, plain words, sentences of different lengths.",
@@ -380,7 +377,6 @@ async function handler(req, res) {
     if (!user) {
       return send(res, 401, { error: "Sign in to generate content.", code: "auth_required" });
     }
-
     /* Free credits are locked until the address is confirmed. */
     if (!user.emailVerified) {
       return send(res, 403, {
@@ -407,81 +403,111 @@ async function handler(req, res) {
   }
 
   const effectiveTone = brand?.tone || tone;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
   const tunable = /api\.groq\.com/.test(baseUrl) && /gpt-oss|qwen/i.test(model);
+  const prompt = buildPrompt({ topic, tone: effectiveTone, brand });
 
-  async function ask() {
-    const upstream = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.8,
-        max_tokens: 2000,
-        ...(tunable ? { reasoning_effort: "low" } : {}),
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an expert multi-channel content strategist. You answer with valid JSON only, and every field is written in the language of the user's brief.",
-          },
-          { role: "user", content: buildPrompt({ topic, tone: effectiveTone, brand }) },
-        ],
-      }),
-    });
+  /* One provider call with its own deadline, so a second attempt gets a full
+     window rather than whatever the first one left of a shared timer. */
+  async function ask({ temperature = 0.8, reminder = "" } = {}) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+    try {
+      const upstream = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          model,
+          temperature,
+          max_tokens: 2000,
+          ...(tunable ? { reasoning_effort: "low" } : {}),
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are an expert multi-channel content strategist. You always answer with valid JSON and nothing else.",
+            },
+            { role: "user", content: reminder ? `${prompt}${reminder}` : prompt },
+          ],
+        }),
+      });
 
-    return { upstream, payload: await upstream.json().catch(() => null) };
+      return { upstream, payload: await upstream.json().catch(() => null) };
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
-  try {
-    let { upstream, payload } = await ask();
+  /* Map a provider failure onto the advice that actually helps. */
+  function providerFailure(upstream, payload) {
+    const detail =
+      payload?.error?.message || payload?.message || `Provider returned ${upstream.status}.`;
 
-    if (!upstream.ok) {
-      const detail =
-        payload?.error?.message || payload?.message || `Provider returned ${upstream.status}.`;
-
-      if (upstream.status === 401 || upstream.status === 403) {
-        return send(res, 502, {
-          error: `The AI provider rejected your key (${upstream.status}). Check AI_API_KEY and that it matches AI_BASE_URL.`,
-        });
-      }
-      if (upstream.status === 404 && /model/i.test(detail)) {
-        return send(res, 502, {
-          error: `The AI provider doesn't recognise the model "${model}". Set AI_MODEL to one it offers — Groq's current free models include openai/gpt-oss-20b.`,
-        });
-      }
-      if (upstream.status === 429) {
-        return send(res, 429, {
-          error:
-            "The AI provider is rate-limiting you or your free quota ran out. Wait a moment or check your provider billing.",
-        });
-      }
-      return send(res, 502, { error: `AI provider error: ${detail}` });
+    if (upstream.status === 401 || upstream.status === 403) {
+      return send(res, 502, {
+        error: `The AI provider rejected your key (${upstream.status}). Check AI_API_KEY and that it matches AI_BASE_URL.`,
+      });
     }
+    if (upstream.status === 404 && /model/i.test(detail)) {
+      return send(res, 502, {
+        error: `The AI provider doesn't recognise the model "${model}". Set AI_MODEL to one it offers — Groq's current free models include openai/gpt-oss-20b.`,
+      });
+    }
+    if (upstream.status === 429) {
+      return send(res, 429, {
+        error:
+          "The AI provider is rate-limiting you or your free quota ran out. Wait a moment or check your provider billing.",
+      });
+    }
+    return send(res, 502, { error: `AI provider error: ${detail}` });
+  }
 
-    let channels = normalizeChannels(readContent(payload));
+  /* Witty and other playful tones are the ones that occasionally come back as
+     an empty reply or broken JSON. That is worth a silent second try — with a
+     lower temperature and an explicit nudge — before the user sees an error. */
+  const RETRY_REMINDER =
+    "\n\nIMPORTANT: the previous attempt returned no usable JSON. Reply again with the JSON object only — no prose, no code fences, no commentary.";
 
-    /* Reasoning models occasionally answer with nothing but thinking. One
-       silent retry is cheaper for the user than an error. */
-    if (!channels && !controller.signal.aborted) {
-      const second = await ask();
-      if (second.upstream.ok) {
-        const retried = normalizeChannels(readContent(second.payload));
-        if (retried) {
-          channels = retried;
-          payload = second.payload;
-        }
+  try {
+    let channels = null;
+    let payload = null;
+    let failure = null;
+
+    for (let attempt = 0; attempt < 2 && !channels; attempt += 1) {
+      const answer = await ask({
+        temperature: attempt === 0 ? 0.8 : 0.4,
+        reminder: attempt === 0 ? "" : RETRY_REMINDER,
+      });
+
+      if (!answer.upstream.ok) {
+        failure = answer;
+        /* 5xx is usually a blip; a rejected key or a rate limit won't fix itself. */
+        if (answer.upstream.status >= 500 && attempt === 0) continue;
+        return providerFailure(answer.upstream, answer.payload);
+      }
+
+      const parsed = normalizeChannels(readContent(answer.payload));
+      if (parsed) {
+        channels = parsed;
+        payload = answer.payload;
+      } else {
+        failure = answer;
       }
     }
 
     if (!channels) {
+      /* Reached only after both attempts failed, and before the credit below:
+         an empty answer is never charged. */
       return send(res, 502, {
-        error: "The AI sent back an empty answer. Try rephrasing the idea.",
+        error:
+          failure && failure.upstream.status >= 500
+            ? `The AI provider is struggling right now (${failure.upstream.status}). Nothing was charged — try again in a moment.`
+            : "The AI sent back an empty answer, twice. Nothing was charged — try again or rephrase the idea.",
+        code: "empty_response",
+        charged: false,
       });
     }
 
@@ -501,17 +527,8 @@ async function handler(req, res) {
 
     return send(res, 200, {
       channels,
-      detectedLanguage: channels.detectedLanguage || null,
-      languageHint: guessLanguage(topic) || null,
       brand: brand
-        ? {
-            id: brand.id,
-            name: brand.name,
-            audience: brand.audience,
-            offer: brand.offer,
-            tone: brand.tone,
-            voiceDna: brand.voiceDna,
-          }
+        ? { id: brand.id, name: brand.name, audience: brand.audience, offer: brand.offer, tone: brand.tone }
         : null,
       unlimited,
       model,
@@ -526,8 +543,6 @@ async function handler(req, res) {
     return send(res, 502, {
       error: `Couldn't reach the AI provider${cause ? ` (${cause})` : ""}. Check AI_BASE_URL and your internet connection.`,
     });
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
