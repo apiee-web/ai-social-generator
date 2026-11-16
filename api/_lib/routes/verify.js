@@ -6,7 +6,7 @@
  * person in, so a link click lands them on a working generator.
  */
 
-import { isEmail, normalizeEmail, publicUser, setSessionCookie, signSession } from "../auth.js";
+import { currentUser, isEmail, normalizeEmail, publicUser, setSessionCookie, signSession } from "../auth.js";
 import { ensureSchema, query } from "../db.js";
 import { fail, methodNotAllowed, noStore, readBody, send } from "../http.js";
 import { codeMatches } from "../verify.js";
@@ -47,6 +47,21 @@ export default async function handler(req, res) {
     const row = rows[0];
     const valid = row && (token || codeMatches(code, row.verification_hash));
     if (!valid) {
+      /* A link clicked twice, or one that mail security scanned before the
+         human got to it, no longer matches. If this browser already carries a
+         confirmed session, answer 200 with that account so the click still
+         lands on a working studio instead of an error. */
+      if (token) {
+        const existing = await currentUser(req).catch(() => null);
+        if (existing && existing.emailVerified !== false) {
+          return send(res, 200, {
+            user: publicUser(existing),
+            verified: true,
+            alreadyVerified: true,
+          });
+        }
+      }
+
       return send(res, 400, {
         error: "That verification link or code is wrong or has expired. Request a new email.",
         code: "bad_verification",

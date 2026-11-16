@@ -70,25 +70,32 @@ function toBuffer(chunk) {
 }
 
 /**
- * Where Stripe sends the buyer back to. APP_URL wins when it is set; otherwise
- * we trust the host Vercel forwarded, with the shape checked so a weird header
- * can't turn the return link into something unexpected.
+ * The origin links should point at: verification emails and Stripe returns.
+ *
+ * The host the request actually arrived on wins, because that is where the
+ * browser will be. A configured APP_URL is only the fallback, and that order
+ * matters: getomnicontext.com redirects to www.getomnicontext.com, so a link
+ * built from a configured bare domain bounces the visitor to another host
+ * mid-flow (lost cookie, and a redirected POST becomes a cross-origin request
+ * that the browser rejects with "Failed to fetch"). The shape is checked so a
+ * crafted header can't turn the link into something unexpected.
  */
 export function resolveOrigin(req) {
-  const configured = String(process.env.APP_URL || "")
-    .trim()
-    .replace(/\/+$/, "");
-  if (configured) return configured;
-
   const host = String(req?.headers?.["x-forwarded-host"] || req?.headers?.host || "")
     .split(",")[0]
     .trim();
-  const proto = String(req?.headers?.["x-forwarded-proto"] || "")
-    .split(",")[0]
-    .trim();
-  if (!/^[a-z0-9.-]+(:\d+)?$/i.test(host)) return "";
 
-  return `${proto === "http" ? "http" : "https"}://${host}`;
+  if (/^[a-z0-9.-]+(:\d+)?$/i.test(host)) {
+    const proto = String(req?.headers?.["x-forwarded-proto"] || "")
+      .split(",")[0]
+      .trim();
+    const local = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host);
+    return `${proto === "http" || local ? "http" : "https"}://${host}`;
+  }
+
+  return String(process.env.APP_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
 }
 
 /** Turn a thrown error into a JSON answer, hiding internals for 500s. */
